@@ -3,6 +3,7 @@ package com.creativeworkbench.writer.core.data
 import androidx.room.withTransaction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -367,6 +368,44 @@ class ChapterRepository(
             }
             // 人物/设定必须挂在作品上，作品没了就一起删，避免孤儿笔记。
             db.noteDao().deleteByWork(workId)
+        }
+    }
+
+    /**
+     * 字数抽检：随机抽 5 章，用章节文件重算字数，和 Room 索引比；
+     * 偏差 >1% 判定索引漂移，全量重算并写回（PRD §5.3）。
+     * 返回修正的章节数，正常运行几乎总是 0。
+     */
+    suspend fun auditWordCounts(sample: Int = 5): Int = withContext(Dispatchers.IO) {
+        writeMutex.withLock {
+            val works = db.workDao().observeAll().first()
+            val allChapters = works.flatMap { db.chapterDao().listByWork(it.id) }
+            if (allChapters.isEmpty()) return@withLock 0
+            val drifted = allChapters.shuffled().take(sample).any { chapter ->
+                val actual = runCatching { files.read(chapter.id)?.blocks?.let { countWords(it) } }.getOrNull()
+                if (actual == null) {
+                    false
+                } else {
+                    kotlin.math.abs(actual - chapter.wordCount) * 100 >
+                        chapter.wordCount.coerceAtLeast(1L)
+                }
+            }
+            if (!drifted) return@withLock 0
+            var fixed = 0
+            works.forEach { work ->
+                var total = 0L
+                db.chapterDao().listByWork(work.id).forEach { chapter ->
+                    val actual = runCatching { files.read(chapter.id)?.blocks?.let { countWords(it) } }
+                        .getOrNull() ?: chapter.wordCount
+                    if (actual != chapter.wordCount) {
+                        db.chapterDao().update(chapter.copy(wordCount = actual))
+                        fixed++
+                    }
+                    total += actual
+                }
+                if (total != work.wordCount) db.workDao().update(work.copy(wordCount = total))
+            }
+            fixed
         }
     }
 

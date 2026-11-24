@@ -70,6 +70,7 @@ fun NotesScreen(
 ) {
     var workFilter by remember { mutableStateOf<String?>(null) }
     var kindFilter by remember { mutableStateOf("all") }
+    var tagFilter by remember { mutableStateOf<String?>(null) }
     var searching by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var showNew by remember { mutableStateOf(false) }
@@ -96,6 +97,9 @@ fun NotesScreen(
                 "quick" -> NoteKind.quick.contains(note.kind)
                 else -> note.kind == kindFilter
             }
+        }
+        .filter { note ->
+            tagFilter == null || note.tags.split(',').map { it.trim() }.any { it.equals(tagFilter, ignoreCase = true) }
         }
         .filter { note ->
             query.isBlank() ||
@@ -156,6 +160,22 @@ fun NotesScreen(
                     Tag("速记", active = kindFilter == "quick", onClick = { kindFilter = "quick" })
                     NoteKind.all.forEach { kind ->
                         Tag(NoteKind.label(kind), active = kindFilter == kind, onClick = { kindFilter = kind })
+                    }
+                }
+            }
+
+            val allTags = notes.flatMap { note ->
+                note.tags.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+            }.distinct().sorted().take(12)
+            if (allTags.isNotEmpty()) {
+                item {
+                    ChipRow {
+                        Tag("全部标签", active = tagFilter == null, onClick = { tagFilter = null })
+                        allTags.forEach { tag ->
+                            Tag(tag, active = tagFilter == tag, onClick = {
+                                tagFilter = if (tagFilter == tag) null else tag
+                            })
+                        }
                     }
                 }
             }

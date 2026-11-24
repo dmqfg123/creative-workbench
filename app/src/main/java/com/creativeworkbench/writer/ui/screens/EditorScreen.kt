@@ -18,6 +18,10 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputConnectionWrapper
 import android.widget.EditText
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.offset
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloatAsState
@@ -188,6 +192,17 @@ fun EditorScreen(
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var restoredPosition by remember { mutableStateOf(false) }
+    // 保存失败时的兜底出口：立刻把全量备份导到用户选的位置
+    val backupExport = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/gzip")
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val result = app.container.backup.export(uri, gzip = true)
+                snackbar.showSnackbar(if (result.isSuccess) "已导出备份" else "导出失败")
+            }
+        }
+    }
 
     // 继续上次位置：记住当前章的第一可见段和偏移。
     LaunchedEffect(state.loading, state.blocks.size) {
@@ -197,8 +212,9 @@ fun EditorScreen(
                 val parts = saved.split('|')
                 val blockId = parts.firstOrNull()
                 val offset = parts.getOrNull(1)?.toIntOrNull() ?: 0
+                // 列表第 0 项是章节头，正文段要从 item 下标 +1 算
                 val index = state.blocks.indexOfFirst { it.id == blockId }
-                if (index >= 0) listState.scrollToItem(index, offset)
+                if (index >= 0) listState.scrollToItem(index + 1, offset)
             }
             restoredPosition = true
         }
@@ -221,7 +237,7 @@ fun EditorScreen(
         snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
             .collectLatest { (index, offset) ->
                 delay(600)
-                val blockId = state.blocks.getOrNull(index)?.id ?: return@collectLatest
+                val blockId = state.blocks.getOrNull(index - 1)?.id ?: return@collectLatest
                 positionPrefs.edit().putString(chapterId, blockId + "|" + offset).apply()
             }
     }
@@ -273,6 +289,13 @@ fun EditorScreen(
     val chapterChars = state.blocks.sumOf { it.text.length }
 
     Box(Modifier.fillMaxSize()) {
+    if (settings.fpsOverlay) {
+        FpsOverlay(
+            Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 12.dp, top = 6.dp)
+        )
+    }
     Column(Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 10.dp),
@@ -392,11 +415,14 @@ fun EditorScreen(
                             state.blocks.firstOrNull()?.let { block ->
                                 viewModel.activate(block.id, 0)
                             }
-                        }
+                        },
+                        onRetrySave = { viewModel.retrySave() },
+                        onExportBackup = { backupExport.launch("雨刮模拟器-紧急备份.json.gz") }
                     )
                 }
                 itemsIndexed(state.blocks, key = { _, block -> block.id }) { _, block ->
                     if (state.activeBlockId == block.id) {
+                        Box(Modifier.fillMaxWidth()) {
                         ActiveBlockEditor(
                             block = block,
                             cursorOffset = state.cursorOffset,
@@ -419,6 +445,31 @@ fun EditorScreen(
                             lineHeightSp = lineHeight,
                             modifier = Modifier.fillMaxWidth()
                         )
+                        // 段落手柄：贴在左边距里，热区 44×44，点一下出「本段操作」
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .offset(x = (-20).dp)
+                                .width(44.dp)
+                                .height(44.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { blockMenuOpen = true },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val handleColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                            Canvas(Modifier.size(14.dp)) {
+                                val dot = 1.6.dp.toPx()
+                                val gap = size.height / 3f
+                                repeat(3) { row ->
+                                    drawCircle(
+                                        color = handleColor,
+                                        radius = dot,
+                                        center = androidx.compose.ui.geometry.Offset(size.width / 2f, gap * row + gap / 2f)
+                                    )
+                                }
+                            }
+                        }
+                        }
                     } else {
                         InactiveBlock(
                             block = block,
@@ -550,8 +601,12 @@ fun EditorScreen(
     }
 
     if (aiOpen) {
+        // PRD §5.5：结果绑定发起时的 revision 与内容哈希；不一致只能看/复制，不能写。
+        val aiStale = aiState.resultText.isNotBlank() &&
+            (aiState.chapterRevision != state.revision || aiState.contentHash != viewModel.contentHash())
         AiPanel(
             state = aiState,
+            stale = aiStale,
             selection = pendingSelection,
             hasContent = state.blocks.any { it.text.isNotBlank() },
             hasActiveBlock = state.activeBlockId != null,
@@ -636,6 +691,39 @@ fun EditorScreen(
     }
 }
 
+/** 调试用帧率显示：每 500ms 统计一次实际渲染帧数，默认关。 */
+@Composable
+private fun FpsOverlay(modifier: Modifier = Modifier) {
+    var fps by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        var frames = 0
+        var last = withFrameNanos { it }
+        while (true) {
+            withFrameNanos { now ->
+                frames++
+                val elapsed = now - last
+                if (elapsed >= 500_000_000L) {
+                    fps = (frames * 1_000_000_000L / elapsed).toInt()
+                    frames = 0
+                    last = now
+                }
+            }
+        }
+    }
+    Surface(
+        color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.75f),
+        shape = RoundedCornerShape(6.dp),
+        modifier = modifier
+    ) {
+        Text(
+            fps.toString() + " fps",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.inverseOnSurface,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+        )
+    }
+}
+
 @Composable
 private fun EditorHeader(
     chapterTitle: String,
@@ -649,7 +737,9 @@ private fun EditorHeader(
     onToggleNote: () -> Unit,
     onNoteChange: (String) -> Unit,
     warning: String?,
-    onStartWriting: () -> Unit
+    onStartWriting: () -> Unit,
+    onRetrySave: () -> Unit,
+    onExportBackup: () -> Unit
 ) {
     val animatedWordCount by animateIntAsState(
         targetValue = wordCount.toInt(),
@@ -728,6 +818,13 @@ private fun EditorHeader(
                         )
                     }
                 }
+            }
+        }
+        if (error != null) {
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onRetrySave) { Text("重试保存") }
+                TextButton(onClick = onExportBackup) { Text("立即导出备份") }
             }
         }
         if (warning != null) {

@@ -23,6 +23,9 @@ interface WorkDao {
 
     @Query("DELETE FROM works WHERE id = :id")
     suspend fun delete(id: String)
+
+    @Query("DELETE FROM works")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -44,6 +47,9 @@ interface ChapterDao {
 
     @Query("DELETE FROM chapters WHERE id = :id")
     suspend fun delete(id: String)
+
+    @Query("DELETE FROM chapters")
+    suspend fun deleteAll()
 
     @Query("SELECT COUNT(*) FROM chapters WHERE workId = :workId")
     suspend fun countByWork(workId: String): Int

@@ -18,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Switch
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -36,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.creativeworkbench.writer.WorkbenchApp
+import com.creativeworkbench.writer.core.backup.BackupBundle
 import com.creativeworkbench.writer.core.backup.ImportResult
 import com.creativeworkbench.writer.core.common.CrashLogger
 import com.creativeworkbench.writer.core.data.WorkEntity
@@ -74,6 +76,9 @@ fun DataSettingsScreen(onBack: () -> Unit) {
     var confirmClear by remember { mutableStateOf(false) }
     var clearText by remember { mutableStateOf("") }
     var pendingClear by remember { mutableStateOf(false) }
+    var includeKey by remember { mutableStateOf(false) }
+    var confirmIncludeKey by remember { mutableStateOf(false) }
+    var pendingImport by remember { mutableStateOf<BackupBundle?>(null) }
 
     LaunchedEffect(Unit) {
         works = container.database.workDao().observeAll().first()
@@ -87,7 +92,7 @@ fun DataSettingsScreen(onBack: () -> Unit) {
     ) { uri ->
         if (uri != null) {
             scope.launch {
-                val result = backup.export(uri, gzip = true)
+                val result = backup.export(uri, gzip = true, includeApiKey = includeKey)
                 val message = if (result.isSuccess) "已导出备份" else "导出失败：" + result.exceptionOrNull()?.message
                 Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                 if (pendingClear && result.isSuccess) {
@@ -114,17 +119,8 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                 if (bundle == null) {
                     Toast.makeText(context, error ?: "读取失败", Toast.LENGTH_LONG).show()
                 } else {
-                    when (val result = backup.importReplace(bundle)) {
-                        is ImportResult.Ok -> {
-                            Toast.makeText(
-                                context,
-                                "已恢复 " + result.preview.works + " 部作品 / " + result.preview.notes + " 条笔记",
-                                Toast.LENGTH_LONG
-                            ).show()
-                            works = container.database.workDao().observeAll().first()
-                        }
-                        is ImportResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
-                    }
+                    // 先让用户看清要导入多少，再整包替换
+                    pendingImport = bundle
                 }
             }
         }
@@ -222,6 +218,60 @@ fun DataSettingsScreen(onBack: () -> Unit) {
         )
     }
 
+    pendingImport?.let { bundle ->
+        AlertDialog(
+            onDismissRequest = { pendingImport = null },
+            title = { Text("导入这份备份？") },
+            text = {
+                Text(
+                    "将导入 " + bundle.works.size + " 部作品 / " + bundle.chapters.size + " 章 / " +
+                        bundle.notes.size + " 条笔记 / " + bundle.aiHistory.size + " 条调用历史。\n" +
+                        "当前数据会被整包替换；导入前会自动在本机备份一份。"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val target = bundle
+                    pendingImport = null
+                    scope.launch {
+                        when (val result = backup.importReplace(target)) {
+                            is ImportResult.Ok -> {
+                                Toast.makeText(
+                                    context,
+                                    "已恢复 " + result.preview.works + " 部作品 / " + result.preview.notes + " 条笔记",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                                works = container.database.workDao().observeAll().first()
+                                noteCount = container.notes.count()
+                                localFiles = backup.localBackups()
+                            }
+                            is ImportResult.Error ->
+                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }) { Text("导入") }
+            },
+            dismissButton = { TextButton(onClick = { pendingImport = null }) { Text("取消") } },
+            shape = MaterialTheme.shapes.large
+        )
+    }
+
+    if (confirmIncludeKey) {
+        AlertDialog(
+            onDismissRequest = { confirmIncludeKey = false },
+            title = { Text("备份里带密钥？") },
+            text = { Text("导出的 .json.gz 会包含明文 API 密钥，放在手机或网盘里都可能被别人读到。只在换机或重装时用，用完记得删掉。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    includeKey = true
+                    confirmIncludeKey = false
+                }) { Text("我知道了") }
+            },
+            dismissButton = { TextButton(onClick = { confirmIncludeKey = false }) { Text("取消") } },
+            shape = MaterialTheme.shapes.large
+        )
+    }
+
     if (confirmClear) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
@@ -300,6 +350,26 @@ fun DataSettingsScreen(onBack: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 PillButton(text = "导出全量备份", onClick = { exportLauncher.launch("雨刮模拟器备份.json.gz") })
                 GhostButton(text = "导入恢复", onClick = { importLauncher.launch(arrayOf("application/gzip", "application/json", "application/octet-stream")) })
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("导出包含 API 密钥", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "默认关闭。打开后备份里会有明文密钥，换机更方便，但文件要自己看紧。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = includeKey,
+                    onCheckedChange = { checked ->
+                        if (checked) confirmIncludeKey = true else includeKey = false
+                    }
+                )
             }
             Spacer(Modifier.height(8.dp))
             TextButton(onClick = {

@@ -61,6 +61,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         assembleModules()
+        // 启动抽检字数索引；漂移才全量重算，正常是空转。
+        viewModelScope.launch {
+            runCatching { chapterRepository.auditWordCounts() }
+        }
     }
 
     fun assembleModules() {
@@ -70,6 +74,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setNotesEnabled(enabled: Boolean) {
+        com.creativeworkbench.writer.core.common.Breadcrumbs.record(
+            if (enabled) "打开设定笔记模块" else "关闭设定笔记模块"
+        )
         settingsRepository.setNotesEnabled(enabled)
         assembleModules()
     }

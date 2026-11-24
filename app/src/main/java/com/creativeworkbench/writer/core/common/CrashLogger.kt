@@ -8,7 +8,7 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 崩溃日志只写本地：类型 + 堆栈 + 时间 + 版本。
+ * 崩溃日志只写本地：时间 + 版本 + 类型 + 堆栈 + 当前页面 + 最近 20 条操作。
  * 不联网、不上报；授权字段在这里统一脱敏（只写异常信息，不写请求体）。
  */
 object CrashLogger {
@@ -31,6 +31,9 @@ object CrashLogger {
             appendLine("thread: " + thread.name)
             appendLine("type: " + throwable.javaClass.name)
             appendLine("message: " + (throwable.message ?: ""))
+            appendLine("page: " + Breadcrumbs.currentPage)
+            appendLine("recent:")
+            Breadcrumbs.snapshot().forEach { appendLine("  - " + it) }
             appendLine("stack:")
             appendLine(throwable.stackTraceToString())
         }

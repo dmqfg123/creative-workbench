@@ -11,6 +11,16 @@ class BackupBundleTest {
     private val json = Json { encodeDefaults = true }
 
     @Test
+    fun apiKeyIsAbsentByDefaultAndRoundTripsWhenExplicit() {
+        val plain = BackupBundle(appVersion = "0.5.0", exportedAt = 1L)
+        assertTrue(json.decodeFromString<BackupBundle>(json.encodeToString(plain)).apiKey == null)
+
+        val withKey = plain.copy(apiKey = "sk-test-123")
+        val decoded = json.decodeFromString<BackupBundle>(json.encodeToString(withKey))
+        assertEquals("sk-test-123", decoded.apiKey)
+    }
+
+    @Test
     fun roundTripsV1Bundle() {
         val bundle = BackupBundle(
             appVersion = "0.1.0",

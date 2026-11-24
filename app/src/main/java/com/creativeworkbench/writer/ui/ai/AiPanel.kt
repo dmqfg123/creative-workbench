@@ -49,6 +49,7 @@ import com.creativeworkbench.writer.ui.design.Tag
 @Composable
 fun AiPanel(
     state: AiUiState,
+    stale: Boolean,
     selection: SelectionInfo?,
     hasContent: Boolean,
     hasActiveBlock: Boolean,
@@ -176,6 +177,20 @@ fun AiPanel(
                 }
             }
 
+            if (stale && state.resultText.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.errorContainer
+                ) {
+                    Text(
+                        "正文在这次生成之后改过了：只能查看或复制，不能再写入。重新生成会在新内容上再来一次。",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            }
             if (state.resultText.isNotBlank() && !state.generating) {
                 Spacer(Modifier.height(14.dp))
                 if (action?.id == AiActions.REWRITE || action?.id == AiActions.CHECK) {
@@ -264,7 +279,7 @@ fun AiPanel(
                         PillButton(
                             text = if (replaces) "替换选区" else "写入正文",
                             onClick = { confirmWrite = true },
-                            enabled = if (replaces) selection != null else hasActiveBlock
+                            enabled = !stale && if (replaces) selection != null else hasActiveBlock
                         )
                     }
                 }

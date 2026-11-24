@@ -14,7 +14,9 @@ data class BackupBundle(
     val aiHistory: List<String> = emptyList(),
     val settings: Map<String, String> = emptyMap(),
     val modules: Map<String, Boolean> = emptyMap(),
-    val plugins: List<PluginBackup> = emptyList()
+    val plugins: List<PluginBackup> = emptyList(),
+    /** 只有用户在导出时显式勾选「包含 API 密钥」才有值；默认不许带。 */
+    val apiKey: String? = null
 )
 
 @Serializable

@@ -85,6 +85,49 @@ class ChapterFileStore(context: Context) {
             tmp.copyTo(target, overwrite = true)
             tmp.delete()
         }
+        fsyncDir(chaptersDir)
+    }
+
+    /** 导入用：先写 .import 暂存文件，数据库换完再 commitImport 换名。 */
+    fun writeImport(content: ChapterContent) {
+        val tmp = File(chaptersDir, content.chapterId + ".json.import")
+        val bytes = json.encodeToString(content).toByteArray(Charsets.UTF_8)
+        FileOutputStream(tmp).use { out ->
+            out.write(bytes)
+            out.flush()
+            out.fd.sync()
+        }
+    }
+
+    /** 把 .import 原子换成正式章节文件；没有暂存文件时忽略。 */
+    fun commitImport(chapterId: String) {
+        val tmp = File(chaptersDir, chapterId + ".json.import")
+        if (!tmp.exists()) return
+        val target = contentFile(chapterId)
+        if (!tmp.renameTo(target)) {
+            tmp.copyTo(target, overwrite = true)
+            tmp.delete()
+        }
+        fsyncDir(chaptersDir)
+    }
+
+    /** 删掉不属于本次导入的章节文件与残留暂存文件。 */
+    fun deleteOtherThan(keep: Set<String>) {
+        chaptersDir.listFiles()?.forEach { file ->
+            val name = file.name
+            val chapterId = name.substringBefore('.')
+            if (name.endsWith(".json.import") || name.endsWith(".journal") || name.endsWith(".json") || name.endsWith(".json.bak")) {
+                if (chapterId !in keep) runCatching { file.delete() }
+            }
+        }
+    }
+
+    /** 目录项也 fsync，避免掉电时 rename 只落一半。 */
+    private fun fsyncDir(dir: File) {
+        runCatching {
+            java.nio.channels.FileChannel.open(dir.toPath(), java.nio.file.StandardOpenOption.READ)
+                .use { it.force(true) }
+        }
     }
 
     fun appendJournal(chapterId: String, record: JournalRecord) {

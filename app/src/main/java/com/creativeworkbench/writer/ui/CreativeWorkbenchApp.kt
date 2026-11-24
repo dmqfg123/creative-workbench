@@ -52,6 +52,26 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val route = backStackEntry?.destination?.route
 
+    // 崩溃日志要记录「当时在哪个页面」
+    LaunchedEffect(route) {
+        com.creativeworkbench.writer.core.common.Breadcrumbs.page(
+            when {
+                route == null -> "启动中"
+                route == "library" -> "书架"
+                route == "notes" -> "笔记列表"
+                route == "more" -> "更多"
+                route?.startsWith("note/") == true -> "笔记详情"
+                route?.startsWith("directory/") == true -> "作品目录"
+                route?.startsWith("editor/") == true -> "编辑器"
+                route == "more/ai" -> "AI 设置"
+                route == "more/ai-history" -> "AI 调用历史"
+                route == "more/modules" -> "模块与扩展"
+                route == "more/data" -> "数据与备份"
+                else -> route.orEmpty()
+            }
+        )
+    }
+
     LaunchedEffect(settings.notesEnabled) {
         if (!settings.notesEnabled && route == "notes") {
             navController.navigate("library") {

@@ -154,6 +154,20 @@ fun ModulesScreen(
                 )
             }
 
+            SectionLabel("代码模块（编译期）")
+            WbCard(contentPadding = PaddingValues(16.dp)) {
+                Text("怎么加一个模块", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "1) 实现 WorkbenchModule 接口（id、名称、开关默认值、导航项）；" +
+                        "2) 在 ModuleRegistry 里注册，返回可撤销句柄；" +
+                        "3) 把数据表/仓库挂在 AppContainer。模块是编译进 APK 的，不做运行时加载、不做在线安装；" +
+                        "加完重新构建 APK 才会出现。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
             SectionLabel("AI 动作包")
             if (packs.isEmpty()) {
                 WbCard(contentPadding = PaddingValues(16.dp)) {

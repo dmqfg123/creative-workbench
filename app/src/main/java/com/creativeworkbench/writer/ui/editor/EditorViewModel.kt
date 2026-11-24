@@ -147,34 +147,62 @@ class EditorViewModel(
     }
 
     /**
-     * 插入笔记：按空行拆段，接在当前段之后；整批算一步撤销。
+     * 插入笔记：按空行拆段，接在光标所在段之后；整批算一步撤销。
      */
     fun insertNote(content: String) {
         val paragraphs = content.split(Regex("\\n\\s*\\n"))
             .map { it.trim() }
             .filter { it.isNotEmpty() }
+        insertParagraphs(paragraphs)
+    }
+
+    /**
+     * 统一插入规则（PRD §5.3）：一律插在光标所在段之后；
+     * 光标停在段中时，先在该处把当前段拆成两段再插入。
+     * 拆段 + 插入整批算一步撤销。
+     */
+    private fun insertParagraphs(paragraphs: List<String>) {
         if (paragraphs.isEmpty()) return
         val before = _state.value.blocks
-        val anchor = _state.value.activeBlockId
-            ?.let { id -> before.indexOfFirst { it.id == id } }
-            ?.takeIf { it >= 0 } ?: (before.size - 1)
+        val activeId = _state.value.activeBlockId
+        val active = before.firstOrNull { it.id == activeId }
+        val cursor = _state.value.cursorOffset.coerceIn(0, active?.text?.length ?: 0)
         val inserted = paragraphs.map { Block(UUID.randomUUID().toString(), it) }
-        val after = before.toMutableList().apply { addAll(anchor + 1, inserted) }
-        undoStack.addLast(UndoEntry(before, after))
+        val after = ArrayList<Block>(before.size + paragraphs.size + 1)
+        var placed = false
+        before.forEach { block ->
+            if (!placed && active != null && block.id == active.id) {
+                placed = true
+                if (cursor in 1 until block.text.length) {
+                    after.add(block.copy(text = block.text.substring(0, cursor)))
+                    after.addAll(inserted)
+                    after.add(Block(UUID.randomUUID().toString(), block.text.substring(cursor)))
+                } else {
+                    after.add(block)
+                    after.addAll(inserted)
+                }
+            } else {
+                after.add(block)
+            }
+        }
+        if (!placed) after.addAll(inserted)
+        val result = after.toList()
+        undoStack.addLast(UndoEntry(before, result))
         redoStack.clear()
         _state.update {
             it.copy(
-                blocks = after,
-                wordCount = refreshWordCounts(after),
+                blocks = result,
+                wordCount = refreshWordCounts(result),
                 dirty = true,
                 activeBlockId = null,
+                cursorOffset = 0,
                 undoAvailable = true,
                 redoAvailable = false,
                 error = null
             )
         }
         editVersion++
-        markDirty(after)
+        markDirty(result)
     }
 
     /** AI 续写写入：按空行拆段，接在当前段之后；整批一步撤销。返回插入的 block id。 */
@@ -260,6 +288,11 @@ class EditorViewModel(
         _state.update { it.copy(activeBlockId = null) }
     }
 
+    /** 保存失败后手动重试。 */
+    fun retrySave() {
+        viewModelScope.launch { saveNow() }
+    }
+
     fun onTextChanged(blockId: String, text: String) {
         val oldBlock = _state.value.blocks.firstOrNull { it.id == blockId }
         val oldCount = blockWordCounts[blockId] ?: oldBlock?.let { repository.countWords(listOf(it)) } ?: 0L
@@ -313,7 +346,13 @@ class EditorViewModel(
     }
 
     fun insertAfter(blockId: String) {
+        // 光标就在这一段时走统一插入规则（段中先拆段）；否则插在这段之后。
+        if (_state.value.activeBlockId == blockId) {
+            insertParagraphs(listOf(""))
+            return
+        }
         val index = _state.value.blocks.indexOfFirst { it.id == blockId }
+        if (index < 0) return
         val newBlock = Block(UUID.randomUUID().toString(), "")
         apply(EditCommand.Insert(index + 1, newBlock))
         _state.update { it.copy(activeBlockId = newBlock.id, cursorOffset = 0) }

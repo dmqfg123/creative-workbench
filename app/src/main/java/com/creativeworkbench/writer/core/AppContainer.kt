@@ -22,7 +22,7 @@ class AppContainer(context: Context) {
     val aiHistory: AiHistoryStore = AiHistoryStore(context)
     val plugins: PluginStore = PluginStore(context)
     val settings: SettingsRepository = SettingsRepository(context)
-    val backup: BackupService = BackupService(context, database, chapterFiles, aiHistory, settings)
+    val backup: BackupService = BackupService(context, database, chapterFiles, aiHistory, settings, aiConfig)
     val moduleHost: ModuleHost = ModuleHost()
     val moduleRuntime: ModuleRuntime = ModuleRuntime(moduleHost)
 }

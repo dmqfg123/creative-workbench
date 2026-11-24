@@ -12,7 +12,11 @@ import com.creativeworkbench.writer.core.data.NoteEntity
 import com.creativeworkbench.writer.core.data.WorkEntity
 import com.creativeworkbench.writer.core.data.WorkbenchDatabase
 import com.creativeworkbench.writer.core.settings.AppSettings
+import androidx.room.withTransaction
+import com.creativeworkbench.writer.core.ai.AiConfigStore
+import com.creativeworkbench.writer.core.settings.FontSizePreset
 import com.creativeworkbench.writer.core.settings.SettingsRepository
+import com.creativeworkbench.writer.core.settings.ThemeMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -43,14 +47,15 @@ class BackupService(
     private val db: WorkbenchDatabase,
     private val chapterFiles: ChapterFileStore,
     private val historyStore: AiHistoryStore,
-    private val settings: SettingsRepository
+    private val settings: SettingsRepository,
+    private val aiConfig: AiConfigStore
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
         prettyPrint = false
     }
 
-    suspend fun buildBundle(): BackupBundle = withContext(Dispatchers.IO) {
+    suspend fun buildBundle(includeApiKey: Boolean = false): BackupBundle = withContext(Dispatchers.IO) {
         val works = db.workDao().observeAll().first()
         val chapters = mutableListOf<ChapterBackup>()
         works.forEach { work ->
@@ -70,13 +75,14 @@ class BackupService(
             notes = notes.map { it.toBackup() },
             aiHistory = history.map { json.encodeToString(AiHistoryBackup.serializer(), it.toBackup()) },
             settings = settings.settings.value.toMap(),
-            modules = mapOf("notes" to settings.settings.value.notesEnabled)
+            modules = mapOf("notes" to settings.settings.value.notesEnabled),
+            apiKey = if (includeApiKey) aiConfig.apiKey().takeIf { it.isNotBlank() } else null
         )
     }
 
-    suspend fun export(uri: Uri, gzip: Boolean = true): Result<Int> = withContext(Dispatchers.IO) {
+    suspend fun export(uri: Uri, gzip: Boolean = true, includeApiKey: Boolean = false): Result<Int> = withContext(Dispatchers.IO) {
         runCatching {
-            val bundle = buildBundle()
+            val bundle = buildBundle(includeApiKey)
             val text = json.encodeToString(BackupBundle.serializer(), bundle)
             val stream = context.contentResolver.openOutputStream(uri)
                 ?: error("无法写入文件")
@@ -123,47 +129,9 @@ class BackupService(
             // 先备份当前数据，失败就中止
             writeLocalBackup()
 
-            val existingChapters = mutableSetOf<String>()
-            db.chapterDao().let { dao ->
-                db.workDao().observeAll().first().forEach { work ->
-                    dao.listByWork(work.id).forEach { existingChapters.add(it.id) }
-                }
-            }
-            existingChapters.forEach { chapterId ->
-                runCatching { chapterFiles.delete(chapterId) }
-            }
-            db.noteDao().deleteAll()
-            db.workDao().observeAll().first().forEach { work -> db.workDao().delete(work.id) }
-
-            bundle.works.forEach { work ->
-                db.workDao().insert(
-                    WorkEntity(
-                        id = work.id,
-                        title = work.title,
-                        wordCount = work.wordCount,
-                        chapterCount = work.chapterCount,
-                        createdAt = work.createdAt,
-                        updatedAt = work.updatedAt,
-                        lastOpenedAt = work.lastOpenedAt
-                    )
-                )
-            }
+            // 1) 章节正文先写 .import 暂存：这一步失败，数据库还没动，原数据完整
             bundle.chapters.forEach { chapter ->
-                db.chapterDao().insert(
-                    ChapterEntity(
-                        id = chapter.id,
-                        workId = chapter.workId,
-                        parentId = chapter.parentId,
-                        title = chapter.title,
-                        orderIndex = chapter.orderIndex,
-                        wordCount = chapter.wordCount,
-                        note = chapter.note,
-                        summary = chapter.summary,
-                        revision = chapter.revision,
-                        updatedAt = chapter.updatedAt
-                    )
-                )
-                chapterFiles.write(
+                chapterFiles.writeImport(
                     ChapterContent(
                         chapterId = chapter.id,
                         revision = chapter.revision,
@@ -172,25 +140,75 @@ class BackupService(
                     )
                 )
             }
-            bundle.notes.forEach { note ->
-                db.noteDao().insert(
-                    NoteEntity(
-                        id = note.id,
-                        workId = note.workId,
-                        kind = note.kind,
-                        title = note.title,
-                        aliases = note.aliases,
-                        content = note.content,
-                        tags = note.tags,
-                        aiReference = note.aiReference,
-                        pinned = note.pinned,
-                        createdAtMs = note.createdAtMs,
-                        updatedAtMs = note.updatedAtMs,
-                        sourceNoteId = note.sourceNoteId
+
+            // 2) 数据库整包替换在一个事务里：任一条失败自动回滚，原数据还在
+            db.withTransaction {
+                db.noteDao().deleteAll()
+                db.chapterDao().deleteAll()
+                db.workDao().deleteAll()
+                bundle.works.forEach { work ->
+                    db.workDao().insert(
+                        WorkEntity(
+                            id = work.id,
+                            title = work.title,
+                            wordCount = work.wordCount,
+                            chapterCount = work.chapterCount,
+                            createdAt = work.createdAt,
+                            updatedAt = work.updatedAt,
+                            lastOpenedAt = work.lastOpenedAt
+                        )
                     )
-                )
+                }
+                bundle.chapters.forEach { chapter ->
+                    db.chapterDao().insert(
+                        ChapterEntity(
+                            id = chapter.id,
+                            workId = chapter.workId,
+                            parentId = chapter.parentId,
+                            title = chapter.title,
+                            orderIndex = chapter.orderIndex,
+                            wordCount = chapter.wordCount,
+                            note = chapter.note,
+                            summary = chapter.summary,
+                            revision = chapter.revision,
+                            updatedAt = chapter.updatedAt
+                        )
+                    )
+                }
+                bundle.notes.forEach { note ->
+                    db.noteDao().insert(
+                        NoteEntity(
+                            id = note.id,
+                            workId = note.workId,
+                            kind = note.kind,
+                            title = note.title,
+                            aliases = note.aliases,
+                            content = note.content,
+                            tags = note.tags,
+                            aiReference = note.aiReference,
+                            pinned = note.pinned,
+                            createdAtMs = note.createdAtMs,
+                            updatedAtMs = note.updatedAtMs,
+                            sourceNoteId = note.sourceNoteId
+                        )
+                    )
+                }
+            }
+
+            // 3) 事务成功后才把暂存文件换名成正式章节文件，再清掉旧章节
+            bundle.chapters.forEach { chapterFiles.commitImport(it.id) }
+            chapterFiles.deleteOtherThan(bundle.chapters.map { it.id }.toSet())
+
+            // 4) 设置与密钥（密钥只有导出时勾选过才在包里）
+            bundle.settings["theme"]?.let { name ->
+                runCatching { settings.setTheme(ThemeMode.valueOf(name)) }
+            }
+            bundle.settings["font_size"]?.let { name ->
+                runCatching { settings.setFontSize(FontSizePreset.valueOf(name)) }
             }
             bundle.settings["notes_enabled"]?.let { settings.setNotesEnabled(it.toBoolean()) }
+            bundle.apiKey?.takeIf { it.isNotBlank() }?.let { aiConfig.saveApiKey(it) }
+
             ImportResult.Ok(
                 BackupPreview(
                     works = bundle.works.size,
@@ -225,11 +243,32 @@ class BackupService(
         runCatching { writeDailyPublicBackup() }
     }
 
-    /** 每次启动检查：同一天没备份就写一份；失败不打扰用户。 */
+    /**
+     * 每次启动检查：同一天没备份就写一份；内容哈希和上次一样就跳过，不白写盘。
+     * 失败不打扰用户。
+     */
     suspend fun autoBackupIfNeeded() = withContext(Dispatchers.IO) {
         val last = settings.settings.value.lastBackupAt ?: 0L
         if (last > 0L && isSameDay(last, System.currentTimeMillis())) return@withContext
-        runCatching { writeLocalBackup() }
+        runCatching {
+            val text = json.encodeToString(BackupBundle.serializer(), buildBundle())
+            val hash = sha256(text)
+            val stampFile = File(context.filesDir, "workbench/backups/.last-hash")
+            val previous = runCatching { stampFile.readText().trim() }.getOrNull()
+            if (previous == hash) {
+                settings.markBackup(System.currentTimeMillis())
+                return@runCatching
+            }
+            val file = writeLocalBackupText(text)
+            stampFile.parentFile?.mkdirs()
+            runCatching { stampFile.writeText(hash) }
+            file
+        }
+    }
+
+    private fun sha256(text: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        return digest.digest(text.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
     }
 
     private fun isSameDay(first: Long, second: Long): Boolean {
@@ -242,8 +281,10 @@ class BackupService(
     }
 
     suspend fun writeLocalBackup(): File = withContext(Dispatchers.IO) {
-        val bundle = buildBundle()
-        val text = json.encodeToString(BackupBundle.serializer(), bundle)
+        writeLocalBackupText(json.encodeToString(BackupBundle.serializer(), buildBundle()))
+    }
+
+    private fun writeLocalBackupText(text: String): File {
         val dir = File(context.filesDir, "workbench/backups").apply { mkdirs() }
         val name = "auto-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.CHINA).format(Date()) + ".json.gz"
         val file = File(dir, name)
@@ -254,7 +295,7 @@ class BackupService(
             ?.drop(3)
             ?.forEach { runCatching { it.delete() } }
         settings.markBackup(System.currentTimeMillis())
-        file
+        return file
     }
 
     fun localBackups(): List<File> {
