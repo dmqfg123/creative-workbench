@@ -12,8 +12,19 @@ import java.util.concurrent.TimeUnit
 
 data class ChatMessage(val role: String, val content: String)
 
+/** 一次调用的 token 账：DeepSeek 会额外给缓存命中/未命中。 */
+data class AiUsage(
+    val promptTokens: Int = 0,
+    val completionTokens: Int = 0,
+    val cacheHitTokens: Int = 0,
+    val cacheMissTokens: Int = 0
+) {
+    val hasCacheInfo: Boolean get() = cacheHitTokens > 0 || cacheMissTokens > 0
+    val totalTokens: Int get() = promptTokens + completionTokens
+}
+
 sealed interface AiCallResult {
-    data class Ok(val content: String) : AiCallResult
+    data class Ok(val content: String, val usage: AiUsage? = null) : AiCallResult
     data class Error(val message: String) : AiCallResult
 }
 
@@ -62,7 +73,8 @@ class AiClient {
                         "请求失败（" + response.code + "）：" + body.take(300)
                     )
                 }
-                val content = JSONObject(body)
+                val parsed = JSONObject(body)
+                val content = parsed
                     .optJSONArray("choices")
                     ?.optJSONObject(0)
                     ?.optJSONObject("message")
@@ -71,12 +83,34 @@ class AiClient {
                 if (content.isBlank()) {
                     AiCallResult.Error("模型返回为空")
                 } else {
-                    AiCallResult.Ok(content.trim())
+                    AiCallResult.Ok(content.trim(), parseUsage(parsed.optJSONObject("usage")))
                 }
             }
         }.getOrElse { error ->
             AiCallResult.Error("网络错误：" + (error.message ?: error.javaClass.simpleName))
         }
+    }
+
+    /** usage 解析：缺失或非法一律当 0，不影响主流程。 */
+    private fun parseUsage(json: JSONObject?): AiUsage? {
+        if (json == null) return null
+        val details = json.optJSONObject("prompt_tokens_details")
+        val hit = when {
+            json.has("prompt_cache_hit_tokens") -> json.optInt("prompt_cache_hit_tokens", 0)
+            details != null && details.has("cached_tokens") -> details.optInt("cached_tokens", 0)
+            else -> 0
+        }
+        val miss = if (json.has("prompt_cache_miss_tokens")) {
+            json.optInt("prompt_cache_miss_tokens", 0)
+        } else {
+            (json.optInt("prompt_tokens", 0) - hit).coerceAtLeast(0)
+        }
+        return AiUsage(
+            promptTokens = json.optInt("prompt_tokens", 0),
+            completionTokens = json.optInt("completion_tokens", 0),
+            cacheHitTokens = hit,
+            cacheMissTokens = miss
+        )
     }
 
     private fun endpointFor(config: AiConfig): String? {

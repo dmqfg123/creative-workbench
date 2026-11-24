@@ -32,7 +32,10 @@ data class AiHistoryRecord(
     val undoAfter: String = "",
     val undoIds: List<String> = emptyList(),
     val applied: Boolean = false,
-    val createdAtMs: Long = 0L
+    val createdAtMs: Long = 0L,
+    val promptTokens: Int = 0,
+    val completionTokens: Int = 0,
+    val cacheHitTokens: Int = 0
 )
 
 /** AI 历史：本地 JSON，最多 200 条；不落盘完整 prompt。 */

@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## 0.7.0（2026-11-24）预算整段淘汰、JSON 容错、usage 记账
+
+接着 dsh-Go 源码拆解（参考/开源项目拆解_dshGo_20261124.md）落了三条：
+
+- **R7 预算整段淘汰**：新增 `PromptBudget`（纯 Kotlin）：正文超预算时按「离光标最远的一头先删」整段淘汰，摘要先删最早的、素材先删最晚的；**不再 takeLast 切半句**。每个被淘汰的条目带 `ContextExclusion(kind, reason, label, tokens)`，预览新增「预算 / 已用 / 余」和「未发送 N 条（超出预算）：第 1 段、第 2 段…」。
+- **R8 JSON 容错**：新增 `JsonSalvage`：字符串感知的括号配平（取第一个完整对象，不被后续解释里的 {} 带跑）+ 去尾逗号 + 无 ASCII 引号时把智能引号规范成 ASCII。检查动作的 JSON 解析改走它，解析不了仍降级为原文展示。
+- **R9 usage 记账**：`AiClient` 解析响应里的 usage（含 DeepSeek 的 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`，兼容 OpenAI 的 `prompt_tokens_details.cached_tokens`），面板显示「本次 tokens：prompt 12340（缓存命中 11800） · 输出 480」，并写进调用历史（promptTokens/completionTokens/cacheHitTokens）。
+- 单测 62 条通过（新增 PromptBudget 7 条、JsonSalvage 8 条）。
+- 真机实测：40 段 / 1.6 万字章节 → 预览「正文 6865/7044 tokens」「未发送 正文 22 条」，生成后显示缓存命中。
+
 ## 0.6.0（2026-11-24）设定注入按命中排序 + 上下文预算明细
 
 借鉴 SillyTavern 世界书的「激活 → 排序 → 装预算」思路（详见 参考/开源项目拆解_SillyTavern_20261124.md）：

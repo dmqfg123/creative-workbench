@@ -16,6 +16,7 @@ import com.creativeworkbench.writer.core.ai.AiHistoryStore
 import com.creativeworkbench.writer.core.ai.AiIssue
 import com.creativeworkbench.writer.core.ai.AiIssueParser
 import com.creativeworkbench.writer.core.ai.AiOutputSanitizer
+import com.creativeworkbench.writer.core.ai.AiUsage
 import com.creativeworkbench.writer.core.ai.ChatMessage
 import com.creativeworkbench.writer.core.ai.ContextPreview
 import com.creativeworkbench.writer.core.ai.PreparedContext
@@ -42,7 +43,9 @@ data class AiUiState(
     val chapterRevision: Long = 0L,
     val contentHash: String = "",
     val requestCount: Int = 1,
-    val availableActions: List<AiActionSpec> = AiActions.builtin
+    val availableActions: List<AiActionSpec> = AiActions.builtin,
+    /** 最近一次调用的 token 账（含缓存命中）。 */
+    val usage: AiUsage? = null
 )
 
 class AiViewModel(
@@ -147,7 +150,10 @@ class AiViewModel(
                         resultKind = action.result.name,
                         resultPreview = cleaned.take(200),
                         resultText = cleaned.take(32 * 1024),
-                        createdAtMs = System.currentTimeMillis()
+                        createdAtMs = System.currentTimeMillis(),
+                        promptTokens = result.usage?.promptTokens ?: 0,
+                        completionTokens = result.usage?.completionTokens ?: 0,
+                        cacheHitTokens = result.usage?.cacheHitTokens ?: 0
                     )
                     historyStore.add(record)
                     lastRecord = record
@@ -155,7 +161,8 @@ class AiViewModel(
                         generating = false,
                         resultText = cleaned,
                         issues = issues,
-                        historyId = record.id
+                        historyId = record.id,
+                        usage = result.usage
                     )
                 }
             }

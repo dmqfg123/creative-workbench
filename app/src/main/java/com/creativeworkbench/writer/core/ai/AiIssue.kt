@@ -10,17 +10,11 @@ data class AiIssue(
 )
 
 object AiIssueParser {
-    /** 模型经常带代码围栏或多余解释：先剥围栏，再只取第一个 JSON 对象。 */
+    /** 模型经常带代码围栏、尾逗号或前后解释：先做容错提取，再解析。 */
     fun parse(raw: String): List<AiIssue>? {
-        val cleaned = raw
-            .replace(Regex("^\\s*```(json|JSON)?\\s*"), "")
-            .replace(Regex("\\s*```\\s*\\z"), "")
-            .trim()
-        val start = cleaned.indexOf('{')
-        val end = cleaned.lastIndexOf('}')
-        if (start < 0 || end <= start) return null
+        val cleaned = JsonSalvage.extractObject(raw) ?: return null
         return runCatching {
-            val root = JSONObject(cleaned.substring(start, end + 1))
+            val root = JSONObject(cleaned)
             val array = root.optJSONArray("issues") ?: return emptyList()
             (0 until array.length()).mapNotNull { index ->
                 val item = array.optJSONObject(index) ?: return@mapNotNull null

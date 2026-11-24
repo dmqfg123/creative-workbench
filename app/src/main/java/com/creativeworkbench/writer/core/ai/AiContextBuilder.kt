@@ -19,7 +19,11 @@ data class ContextPreview(
     val summary: String,
     val notes: List<String>,
     /** 每块实际 token 与上限，给预览做明细。 */
-    val blocks: List<ContextBlock> = emptyList()
+    val blocks: List<ContextBlock> = emptyList(),
+    /** 没进上下文的条目与原因，逐条可解释。 */
+    val excluded: List<ContextExclusion> = emptyList(),
+    val budget: Int = 0,
+    val used: Int = 0
 )
 
 data class ContextBlock(val label: String, val tokens: Int, val cap: Int)
@@ -97,26 +101,33 @@ class AiContextBuilder(
             (it.workId == null || it.workId == workId) &&
                 NoteKind.material.contains(it.kind) && it.aiReference
         }.sortedBy { it.id }
-        val materialText = trimToCap(
-            materialNotes.joinToString("\n") { SettingInjector.render(it) },
-            materialCap
+        val materialFit = PromptBudget.fitEntries(
+            entries = materialNotes.map { it.id to SettingInjector.render(it) },
+            cap = materialCap,
+            kind = "素材",
+            keepTail = false
         )
+        val materialText = materialFit.text
 
-        // 最近 10 章摘要：空摘要不占槽。
+        // 最近 10 章摘要：空摘要不占槽；超预算从最早的一章开始整条省略。
         val summaries = chapterList
             .filter { it.id != chapterId && !it.summary.isNullOrBlank() }
             .takeLast(10)
-        val summaryText = trimToCap(
-            summaries.joinToString("\n") { "第 " + (it.orderIndex + 1) + " 章 " + it.title + "：" + it.summary },
-            summaryCap
-        )
+        val summaryEntries = summaries.map {
+            ("第 " + (it.orderIndex + 1) + " 章 " + it.title) to
+                ("第 " + (it.orderIndex + 1) + " 章 " + it.title + "：" + it.summary)
+        }
+        val summaryFit = PromptBudget.fitEntries(summaryEntries, summaryCap, "摘要", keepTail = true)
+        val summaryText = summaryFit.text
 
-        // 当前章：按动作决定窗口。
-        val chapterText = when (action.id) {
-            AiActions.CHECK -> checkWindow(blocks, activeBlockId)
-            AiActions.REWRITE -> rewriteWindow(blocks, selection)
-            else -> continueWindow(blocks, activeBlockId)
-        }.let { trimToCap(it, chapterCap, keepTail = true) }
+        // 当前章：按动作决定窗口，超预算整段淘汰（不切半句）。
+        val anchorIndex = blocks.indexOfFirst { it.id == activeBlockId }.takeIf { it >= 0 }
+        val chapterFit = when (action.id) {
+            AiActions.CHECK -> PromptBudget.fitBlocks(blocks, checkIndices(blocks, anchorIndex), chapterCap, anchorIndex)
+            AiActions.REWRITE -> PromptBudget.fitBlocks(blocks, rewriteIndices(blocks, selection), chapterCap, null)
+            else -> PromptBudget.fitBlocks(blocks, blocks.indices.toList(), chapterCap, anchorIndex ?: blocks.lastIndex)
+        }
+        val chapterText = chapterFit.text
 
         val chapterChars = blocks.sumOf { it.text.length }
         if (action.id == AiActions.CHECK && chapterChars > 15000) {
@@ -169,16 +180,41 @@ class AiContextBuilder(
             summaries.size + " 条 · 素材 " + materialNotes.size + " 条"
         val blocksBudget = listOf(
             ContextBlock("设定", injection.usedTokens, settingCap),
-            ContextBlock("正文", TokenEstimator.estimate(chapterText), chapterCap),
-            ContextBlock("摘要", TokenEstimator.estimate(summaryText), summaryCap),
-            ContextBlock("素材", TokenEstimator.estimate(materialText), materialCap),
+            ContextBlock("正文", chapterFit.tokens, chapterCap),
+            ContextBlock("摘要", summaryFit.tokens, summaryCap),
+            ContextBlock("素材", materialFit.tokens, materialCap),
             ContextBlock("前一章尾", TokenEstimator.estimate(prevTail), 500)
         )
+        val dropped = buildList {
+            injection.omitted.forEach { hit ->
+                add(ContextExclusion("设定", ExclusionReason.BeyondBudget, hit.note.title, hit.tokens))
+            }
+            addAll(chapterFit.dropped)
+            addAll(summaryFit.dropped)
+            addAll(materialFit.dropped)
+        }
+        if (chapterFit.dropped.isNotEmpty()) {
+            notes.add("正文超预算，已去掉最早 " + chapterFit.dropped.size + " 段（整段省略，没有截半句）")
+        }
+        if (summaryFit.dropped.isNotEmpty()) {
+            notes.add("摘要超预算，省略了 " + summaryFit.dropped.size + " 章：" +
+                summaryFit.dropped.map { it.label }.take(4).joinToString("、"))
+        }
+        if (materialFit.dropped.isNotEmpty()) {
+            notes.add("素材超预算，省略了 " + materialFit.dropped.size + " 条")
+        }
 
         return PreparedContext(
             system = AiActions.systemPrompt(action),
             user = user,
-            preview = ContextPreview(summaryLine, notes, blocksBudget)
+            preview = ContextPreview(
+                summary = summaryLine,
+                notes = notes,
+                blocks = blocksBudget,
+                excluded = dropped,
+                budget = budget,
+                used = blocksBudget.sumOf { it.tokens }
+            )
         )
     }
 
@@ -192,41 +228,19 @@ class AiContextBuilder(
         else -> ""
     }
 
-    private fun continueWindow(blocks: List<Block>, activeBlockId: String?): String {
-        val anchor = blocks.indexOfFirst { it.id == activeBlockId }.takeIf { it >= 0 } ?: (blocks.lastIndex)
-        val rendered = blocks.mapIndexed { index, block ->
-            "[[b" + index + "]] " + block.text + if (index == anchor) "  ← 从这里续写" else ""
-        }
-        // 超预算时保留光标前 3000 字 + 后 500 字。
-        val joined = rendered.joinToString("\n")
-        if (joined.length <= 3500) return joined
-        return joined.takeLast(3500)
-    }
-
-    private fun rewriteWindow(blocks: List<Block>, selection: SelectionInfo?): String {
-        if (selection == null) return blocks.joinToString("\n") { it.text }
-        val index = blocks.indexOfFirst { it.text == selection.text }
-        val start = (index - 5).coerceAtLeast(0)
-        val end = (index + 5).coerceAtMost(blocks.lastIndex)
-        return blocks.subList(start, end + 1).joinToString("\n") { it.text }
-    }
-
-    private fun checkWindow(blocks: List<Block>, activeBlockId: String?): String {
+    /** 检查的范围：全章，或（超 1.5 万字时）光标段 ±2。 */
+    private fun checkIndices(blocks: List<Block>, anchorIndex: Int?): List<Int> {
         val total = blocks.sumOf { it.text.length }
-        val anchor = blocks.indexOfFirst { it.id == activeBlockId }.takeIf { it >= 0 } ?: 0
-        val range = if (total > 15000) {
-            (anchor - 2).coerceAtLeast(0)..(anchor + 2).coerceAtMost(blocks.lastIndex)
-        } else {
-            blocks.indices
-        }
-        return range.joinToString("\n") { index -> "[[b" + index + "]] " + blocks[index].text }
+        if (total <= 15000) return blocks.indices.toList()
+        val anchor = anchorIndex ?: 0
+        return ((anchor - 2).coerceAtLeast(0)..(anchor + 2).coerceAtMost(blocks.lastIndex)).toList()
     }
 
-    private fun trimToCap(text: String, cap: Int, keepTail: Boolean = false): String {
-        if (TokenEstimator.estimate(text) <= cap) return text
-        val rough = (cap / 1.1).toInt().coerceAtLeast(200)
-        val sliced = if (keepTail) text.takeLast(rough) else text.take(rough)
-        return if (keepTail) "……（前文已省略）\n" + sliced else sliced + "\n……（后文已省略）"
+    /** 改写的范围：选中段前后各 5 段。 */
+    private fun rewriteIndices(blocks: List<Block>, selection: SelectionInfo?): List<Int> {
+        if (selection == null) return blocks.indices.toList()
+        val index = blocks.indexOfFirst { it.text == selection.text }.takeIf { it >= 0 } ?: 0
+        return ((index - 5).coerceAtLeast(0)..(index + 5).coerceAtMost(blocks.lastIndex)).toList()
     }
 
     fun contentHash(blocks: List<Block>): String {

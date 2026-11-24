@@ -166,6 +166,24 @@ fun AiPanel(
                                 }
                             )
                         }
+                        if (preview.budget > 0) {
+                            Text(
+                                "预算 " + preview.budget + " · 已用 " + preview.used + " · 余 " +
+                                    (preview.budget - preview.used).coerceAtLeast(0),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (preview.excluded.isNotEmpty()) {
+                            preview.excluded.groupBy { it.kind }.forEach { (kind, items) ->
+                                Text(
+                                    "· 未发送 " + kind + " " + items.size + " 条（超出预算）：" +
+                                        items.map { it.label }.take(6).joinToString("、"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                         preview.notes.forEach { note ->
                             Spacer(Modifier.height(4.dp))
                             Text(
@@ -240,6 +258,17 @@ fun AiPanel(
                             .padding(12.dp)
                     )
                 }
+            }
+
+            state.usage?.let { usage ->
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "本次 tokens：prompt " + usage.promptTokens +
+                        (if (usage.hasCacheInfo) "（缓存命中 " + usage.cacheHitTokens + "）" else "") +
+                        " · 输出 " + usage.completionTokens,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             if (state.issues.isNotEmpty()) {
