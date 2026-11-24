@@ -154,6 +154,18 @@ fun AiPanel(
                         Text("将发送", style = MaterialTheme.typography.labelMedium)
                         Spacer(Modifier.height(4.dp))
                         Text(preview.summary, style = MaterialTheme.typography.bodySmall)
+                        preview.blocks.forEach { block ->
+                            val ratio = if (block.cap > 0) block.tokens.toFloat() / block.cap else 0f
+                            Text(
+                                "· " + block.label + " " + block.tokens + " / " + block.cap + " tokens",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = when {
+                                    ratio >= 1f -> MaterialTheme.colorScheme.error
+                                    ratio >= 0.8f -> MaterialTheme.colorScheme.primary
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                        }
                         preview.notes.forEach { note ->
                             Spacer(Modifier.height(4.dp))
                             Text(

@@ -17,8 +17,12 @@ data class SelectionInfo(
 
 data class ContextPreview(
     val summary: String,
-    val notes: List<String>
+    val notes: List<String>,
+    /** 每块实际 token 与上限，给预览做明细。 */
+    val blocks: List<ContextBlock> = emptyList()
 )
+
+data class ContextBlock(val label: String, val tokens: Int, val cap: Int)
 
 data class SettingOverflow(val message: String, val omitted: Int)
 
@@ -57,45 +61,44 @@ class AiContextBuilder(
         val materialCap = (budget * 0.10).toInt()
         val notes = mutableListOf<String>()
 
+        // 前一章结尾 500 字：既进上下文，也用来判断设定命中。
+        val currentIndex = chapterList.indexOfFirst { it.id == chapterId }
+        val prevChapter = if (currentIndex > 0) chapterList[currentIndex - 1] else null
+        val prevTail = prevChapter?.let { prev ->
+            runCatching {
+                chapters.openChapter(prev.id)?.content?.blocks?.joinToString("\n") { it.text }
+            }.getOrNull()?.takeLast(500).orEmpty()
+        }.orEmpty()
+
         // 设定类：当前作品的全部人物/设定，强制注入。
         val settingNotes = allNotes.filter {
             it.workId == workId && NoteKind.setting.contains(it.kind)
         }
-        var settingText = settingNotes.joinToString("\n") { renderNote(it) }
-        var omittedSettings = 0
-        if (TokenEstimator.estimate(settingText) > settingCap) {
-            if (!allowSettingOverflow) {
-                return PreparedContext(
-                    system = "",
-                    user = "",
-                    overflow = SettingOverflow(
-                        message = "设定已超出预算（约 " + TokenEstimator.estimate(settingText) +
-                            " tokens / 上限 " + settingCap + "），请精简、拆分或删除部分设定。",
-                        omitted = settingNotes.size
-                    )
+        val scanText = blocks.joinToString("\n") { it.text } + "\n" + prevTail
+        val injection = SettingInjector.inject(settingNotes, scanText, settingCap)
+        val settingText = injection.keptText
+        if (injection.omitted.isNotEmpty() && !allowSettingOverflow) {
+            val omittedTitles = injection.omitted.map { it.note.title }.take(6).joinToString("、")
+            return PreparedContext(
+                system = "",
+                user = "",
+                overflow = SettingOverflow(
+                    message = "设定共 " + settingNotes.size + " 条，命中 " + injection.hitCount +
+                        " 条；设定预算 " + settingCap + " tokens，需省略 " +
+                        injection.omitted.size + " 条（" + omittedTitles + "…）。" +
+                        "可以精简设定、拆分成长短两版，或选「仍然发送」。",
+                    omitted = injection.omitted.size
                 )
-            }
-            val kept = mutableListOf<NoteEntity>()
-            var used = 0
-            for (note in settingNotes) {
-                val cost = TokenEstimator.estimate(renderNote(note))
-                if (used + cost > settingCap) {
-                    omittedSettings++
-                } else {
-                    used += cost
-                    kept.add(note)
-                }
-            }
-            settingText = kept.joinToString("\n") { renderNote(it) }
+            )
         }
 
         // 素材类：只有显式勾选（aiReference）的才进；备忘不参与。
         val materialNotes = allNotes.filter {
             (it.workId == null || it.workId == workId) &&
                 NoteKind.material.contains(it.kind) && it.aiReference
-        }
+        }.sortedBy { it.id }
         val materialText = trimToCap(
-            materialNotes.joinToString("\n") { renderNote(it) },
+            materialNotes.joinToString("\n") { SettingInjector.render(it) },
             materialCap
         )
 
@@ -108,15 +111,6 @@ class AiContextBuilder(
             summaryCap
         )
 
-        // 前一章结尾 500 字。
-        val currentIndex = chapterList.indexOfFirst { it.id == chapterId }
-        val prevChapter = if (currentIndex > 0) chapterList[currentIndex - 1] else null
-        val prevTail = prevChapter?.let { prev ->
-            runCatching {
-                chapters.openChapter(prev.id)?.content?.blocks?.joinToString("\n") { it.text }
-            }.getOrNull()?.takeLast(500).orEmpty()
-        }.orEmpty()
-
         // 当前章：按动作决定窗口。
         val chapterText = when (action.id) {
             AiActions.CHECK -> checkWindow(blocks, activeBlockId)
@@ -128,15 +122,21 @@ class AiContextBuilder(
         if (action.id == AiActions.CHECK && chapterChars > 15000) {
             notes.add("本次只检查当前段及前后各 2 段（约 " + chapterText.length + " 字），不是全书检查")
         }
-        if (omittedSettings > 0) {
-            notes.add("世界观/人物共 " + settingNotes.size + " 条，已包含 " + (settingNotes.size - omittedSettings) +
-                " 条，" + omittedSettings + " 条因预算省略")
+        if (injection.omitted.isNotEmpty()) {
+            notes.add(
+                "设定共 " + settingNotes.size + " 条，已包含 " + injection.kept.size +
+                    " 条（其中命中 " + injection.hitCount + " 条优先），" + injection.omitted.size +
+                    " 条因预算省略：" + injection.omitted.map { it.note.title }.take(6).joinToString("、")
+            )
+        }
+        if (injection.overflowed) {
+            notes.add("有命中设定单条就超过设定预算，已整条保留，其它设定被挤掉")
         }
 
         val user = buildString {
             appendLine("【作品】" + (chapters.work(workId)?.title ?: ""))
             if (settingText.isNotBlank()) {
-                appendLine("【设定（强制注入，共 " + settingNotes.size + " 条）】")
+                appendLine("【设定（强制注入，共 " + injection.kept.size + " 条）】")
                 appendLine(settingText)
             } else {
                 appendLine("【设定】无")
@@ -165,13 +165,20 @@ class AiContextBuilder(
 
         val settingChars = settingText.length
         val summaryLine = "正文 " + chapterText.length + " 字 · 设定 " +
-            settingNotes.size + " 条 " + settingChars + " 字 · 摘要 " +
+            injection.kept.size + " 条 " + settingChars + " 字 · 摘要 " +
             summaries.size + " 条 · 素材 " + materialNotes.size + " 条"
+        val blocksBudget = listOf(
+            ContextBlock("设定", injection.usedTokens, settingCap),
+            ContextBlock("正文", TokenEstimator.estimate(chapterText), chapterCap),
+            ContextBlock("摘要", TokenEstimator.estimate(summaryText), summaryCap),
+            ContextBlock("素材", TokenEstimator.estimate(materialText), materialCap),
+            ContextBlock("前一章尾", TokenEstimator.estimate(prevTail), 500)
+        )
 
         return PreparedContext(
             system = AiActions.systemPrompt(action),
             user = user,
-            preview = ContextPreview(summaryLine, notes)
+            preview = ContextPreview(summaryLine, notes, blocksBudget)
         )
     }
 
@@ -183,12 +190,6 @@ class AiContextBuilder(
                 "{\"issues\":[{\"blockId\":\"段落 id\",\"excerpt\":\"原文片段\",\"severity\":\"low|medium|high\",\"message\":\"问题说明\"}]}。" +
                 "没有问题输出 {\"issues\":[]}。"
         else -> ""
-    }
-
-    private fun renderNote(note: NoteEntity): String {
-        val aliases = note.aliases.split(',').map { it.trim() }.filter { it.isNotEmpty() }
-        val aliasText = if (aliases.isEmpty()) "" else "（别名：" + aliases.joinToString("、") + "）"
-        return "- [" + NoteKind.label(note.kind) + "] " + note.title + aliasText + "：" + note.content
     }
 
     private fun continueWindow(blocks: List<Block>, activeBlockId: String?): String {

@@ -1,20 +1,26 @@
-# 阶段性交付说明（0.5.0）
+# 阶段性交付说明（0.6.0）
 
-> 日期：2026-11-24 ｜ 代码：E:\AIbendi\work\creative-workbench（tag v0.5.0）｜ 文档：E:\AIbendi\文学创作平台项目
+> 日期：2026-11-24 ｜ 代码：E:\AIbendi\work\creative-workbench（tag v0.6.0）｜ 文档：E:\AIbendi\文学创作平台项目
 > 状态：S1–S5 落地；PRD 逐条核对后的 9 处缺口已补；真机回归通过。
 
 ## 产物
 
 | 文件 | 大小 | SHA-256 |
 |---|---|---|
-| apk/雨刮模拟器_0.5.0_release.apk | 21,650,578 B | C2C63AF6B070398CDB7813FD7600D2A6C0223727BE79DE0478944AA267A724F4 |
-| apk/雨刮模拟器_0.5.0_debug.apk | 28,782,635 B | 18796372D8EB82F7E0E8A35736EDA3CB8FE1D0BD61D8814CB7C40943C7DB7E56 |
+| apk/雨刮模拟器_0.6.0_release.apk | 21,666,962 B | 97050CAAE3497ADABB5E39C13BABEF5861404B95B6A9237789E739E0793C33B9 |
+| apk/雨刮模拟器_0.6.0_debug.apk | 28,799,019 B | B41B60C5422ECB11482F4666A9D0FBD1ECA624DA7F641CFDE8F81C93F3A08A3D |
 
-- package：com.creativeworkbench.writer；versionCode 16 / versionName 0.5.0；minSdk 29 / targetSdk 34 / compileSdk 34。
+- package：com.creativeworkbench.writer；versionCode 17 / versionName 0.6.0；minSdk 29 / targetSdk 34 / compileSdk 34。
 - 签名：项目内 keystore/debug.keystore（固定，可一直覆盖安装、数据保留）。这是自用签名，不是商店发布签名；要换成正式发布签名，需要「导出备份 → 卸载 → 装新签名 → 导入备份」一次，之后固定用它。
 - 真机：Redmi Note 11 5G（Android 13 / HyperOS）。0.4.9 → 0.5.0 覆盖安装，作品/章节/笔记/设置全保留。
 
-## 本轮改动（0.4.9 → 0.5.0）
+## 本轮改动（0.6.0）
+
+- 设定注入改「命中优先 + 预算内排序 + 省略明细」（借鉴 SillyTavern 世界书），修掉按 updatedAt 排序的隐性 bug。
+- 素材改稳定序；预览新增每块 token/上限明细。
+- 单测 47 条通过。
+
+## 上一轮（0.4.9 → 0.5.0）
 
 - AI 写入按 revision + 内容哈希门控（不一致只能看/复制）。
 - 继续上次位置修正下标错位；段落手柄（44×44）；帧率显示真实生效。
@@ -27,7 +33,11 @@
 - 原子写补目录 fsync；备份内容哈希未变跳过重写。
 - 插入光标在段中先拆段（一步撤销）；笔记按标签筛选。
 
-## 实测（0.5.0 release / 真机）
+## 实测（0.6.0 release / 真机）
+
+- 真机 mock 请求体：设定顺序为命中条目在前（Echo、Tower），未命中的 Nobody 垫后；预览显示「设定 3 条 95 字」+「设定 80/7044 tokens」等 5 个块。
+
+## 上一轮实测（0.5.0）
 
 - 升级：0.4.9 → 0.5.0 覆盖安装，数据完整。
 - 继续上次位置：滚到第 19 段 → 返回 → 重进，仍停在第 19 段。
@@ -37,7 +47,7 @@
 - 导入：恢复含 40 段长章的备份 → 章节文件与 Room 同步替换，旧章节文件被清理；导入后目录显示 2 章 1311 字。
 - 笔记标签：新建笔记打标签后，列表出现「全部标签 / plot / rain」chip 行。
 - 模块页说明卡、导出含密钥开关在真机可见。
-- 单测 37 条通过；0.5.0 release + debug 构建通过。
+- 单测 47 条通过；0.6.0 release + debug 构建通过。
 
 ## 已知问题 / 未验
 
