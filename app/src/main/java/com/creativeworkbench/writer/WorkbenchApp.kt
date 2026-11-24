@@ -18,6 +18,7 @@ class WorkbenchApp : Application() {
         // 启动时补一次当天备份；失败不阻塞启动。
         CoroutineScope(Dispatchers.IO).launch {
             runCatching { container.backup.autoBackupIfNeeded() }
+            runCatching { container.backup.autoDailyPublicBackupIfNeeded() }
         }
     }
 }

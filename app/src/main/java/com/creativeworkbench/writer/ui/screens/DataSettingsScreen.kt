@@ -1,5 +1,6 @@
 package com.creativeworkbench.writer.ui.screens
 
+import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -66,6 +67,7 @@ fun DataSettingsScreen(onBack: () -> Unit) {
     var crashFiles by remember { mutableStateOf(listOf<java.io.File>()) }
     var lastBackup by remember { mutableStateOf(app.container.settings.settings.value.lastBackupAt) }
     var noteCount by remember { mutableStateOf(0) }
+    var lastSafAt by remember { mutableStateOf(app.container.settings.settings.value.lastSafBackupAt) }
     var workPicker by remember { mutableStateOf(false) }
     var exportTarget by remember { mutableStateOf<WorkEntity?>(null) }
     var exportMarkdown by remember { mutableStateOf(true) }
@@ -304,6 +306,37 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                     }) { Text("恢复") }
                 }
             }
+
+            SectionLabel("每日自动备份")
+            Text(
+                "每天启动自动写一份到：文件管理 → Download → 雨刮模拟器备份/",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "不用选目录、不用授权；这个文件夹不随卸载消失。上次写入：" +
+                    (lastSafAt?.let { formatTime(it) } ?: "还没有"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            GhostButton(
+                text = "立即备份一份",
+                onClick = {
+                    scope.launch {
+                        val result = backup.writeDailyPublicBackup()
+                        lastSafAt = System.currentTimeMillis()
+                        Toast.makeText(
+                            context,
+                            result.fold(
+                                { "已备份到 Download/雨刮模拟器备份/" + it },
+                                { "备份失败：" + (it.message ?: "") }
+                            ),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            )
 
             SectionLabel("单部作品")
             GhostButton(text = "导出作品 TXT / Markdown", onClick = { workPicker = true })

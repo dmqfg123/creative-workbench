@@ -2,6 +2,7 @@ package com.creativeworkbench.writer.core.backup
 
 import android.content.Context
 import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
 import com.creativeworkbench.writer.core.ai.AiHistoryStore
 import com.creativeworkbench.writer.core.data.Block
 import com.creativeworkbench.writer.core.data.ChapterContent
@@ -199,6 +200,29 @@ class BackupService(
                 )
             )
         }.getOrElse { error -> ImportResult.Error("导入失败：" + (error.message ?: "未知错误")) }
+    }
+
+    /** 每天一份到 Download/雨刮模拟器备份/，不需要用户选目录。 */
+    suspend fun writeDailyPublicBackup(): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val bundle = buildBundle()
+            val text = json.encodeToString(BackupBundle.serializer(), bundle)
+            val bytes = java.io.ByteArrayOutputStream().use { out ->
+                GZIPOutputStream(out).use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                out.toByteArray()
+            }
+            val name = "雨刮模拟器备份-" +
+                SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date()) + ".json.gz"
+            PublicBackupStore.write(context, name, bytes).getOrThrow()
+            settings.markSafBackup(System.currentTimeMillis())
+            name
+        }
+    }
+
+    suspend fun autoDailyPublicBackupIfNeeded() = withContext(Dispatchers.IO) {
+        val last = settings.settings.value.lastSafBackupAt ?: 0L
+        if (last > 0L && isSameDay(last, System.currentTimeMillis())) return@withContext
+        runCatching { writeDailyPublicBackup() }
     }
 
     /** 每次启动检查：同一天没备份就写一份；失败不打扰用户。 */

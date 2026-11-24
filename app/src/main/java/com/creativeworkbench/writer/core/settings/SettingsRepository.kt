@@ -18,7 +18,8 @@ data class AppSettings(
     val fpsOverlay: Boolean = false,
     val lastBackupAt: Long? = null,
     val lastExportAt: Long? = null,
-    val librarySort: LibrarySort = LibrarySort.Recent
+    val librarySort: LibrarySort = LibrarySort.Recent,
+    val lastSafBackupAt: Long? = null
 )
 
 class SettingsRepository(context: Context) {
@@ -38,7 +39,8 @@ class SettingsRepository(context: Context) {
         lastBackupAt = prefs.getLong("last_backup_at", 0L).takeIf { it > 0L },
         lastExportAt = prefs.getLong("last_export_at", 0L).takeIf { it > 0L },
         librarySort = runCatching { LibrarySort.valueOf(prefs.getString("library_sort", LibrarySort.Recent.name)!!) }
-            .getOrDefault(LibrarySort.Recent)
+            .getOrDefault(LibrarySort.Recent),
+        lastSafBackupAt = prefs.getLong("last_saf_backup_at", 0L).takeIf { it > 0L }
     )
 
     fun setTheme(mode: ThemeMode) {
@@ -74,6 +76,11 @@ class SettingsRepository(context: Context) {
     fun setFpsOverlay(enabled: Boolean) {
         prefs.edit().putBoolean("fps_overlay", enabled).apply()
         _settings.value = _settings.value.copy(fpsOverlay = enabled)
+    }
+
+    fun markSafBackup(now: Long) {
+        prefs.edit().putLong("last_saf_backup_at", now).apply()
+        _settings.value = _settings.value.copy(lastSafBackupAt = now)
     }
 
     fun markBackup(now: Long) {
