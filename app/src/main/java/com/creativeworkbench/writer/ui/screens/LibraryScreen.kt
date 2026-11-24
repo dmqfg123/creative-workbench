@@ -56,6 +56,7 @@ fun LibraryScreen(
     works: List<WorkEntity>,
     onCreateWork: (String) -> Unit,
     onOpenWork: (String) -> Unit,
+    onOpenDirectory: (String) -> Unit,
     onDeleteWork: (String) -> Unit
 ) {
     var showNewWork by remember { mutableStateOf(false) }
@@ -114,6 +115,7 @@ fun LibraryScreen(
                 WorkCard(
                     work = work,
                     onClick = { onOpenWork(work.id) },
+                    onOpenDirectory = { onOpenDirectory(work.id) },
                     onDelete = { onDeleteWork(work.id) }
                 )
             }
@@ -138,7 +140,12 @@ fun LibraryScreen(
 }
 
 @Composable
-private fun WorkCard(work: WorkEntity, onClick: () -> Unit, onDelete: () -> Unit) {
+private fun WorkCard(
+    work: WorkEntity,
+    onClick: () -> Unit,
+    onOpenDirectory: () -> Unit,
+    onDelete: () -> Unit
+) {
     var menuOpen by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
 
@@ -205,6 +212,13 @@ private fun WorkCard(work: WorkEntity, onClick: () -> Unit, onDelete: () -> Unit
             Box {
                 TextButton(onClick = { menuOpen = true }) { Text("…") }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("作品目录") },
+                        onClick = {
+                            menuOpen = false
+                            onOpenDirectory()
+                        }
+                    )
                     DropdownMenuItem(
                         text = { Text("删除") },
                         onClick = {

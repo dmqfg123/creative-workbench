@@ -44,7 +44,8 @@ class ChapterFileStore(context: Context) {
     fun read(chapterId: String): ChapterContent? {
         val file = contentFile(chapterId)
         if (!file.exists()) return null
-        return runCatching { json.decodeFromString<ChapterContent>(file.readText(Charsets.UTF_8)) }.getOrNull()
+        // 解析失败必须抛出，不能当成空章节覆盖原文件。
+        return json.decodeFromString<ChapterContent>(file.readText(Charsets.UTF_8))
     }
 
     fun write(content: ChapterContent) {

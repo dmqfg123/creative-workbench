@@ -1,10 +1,10 @@
 # 创作工作台
 
-个人 Android 写作 App：手机原生、AI 辅助、数据只存本机。当前是 S1 骨架，编辑器/AI/备份尚未实现。
+个人 Android 写作 App：手机原生、AI 辅助、数据只存本机。当前是 S1 骨架 + S2 编辑器原型 + S3 目录原型；AI/备份尚未实现。
 
 ## 状态
 
-- 版本：0.1.0（S1）
+- 版本：0.1.0（S1 + S2 + S3 原型）
 - 构建：AGP 8.5.2 / Gradle 8.9 / Kotlin 2.0.21 / compileSdk 34 / minSdk 29
 - 未装机验证（当前没有接 adb 真机）；单元测试通过。
 
@@ -27,10 +27,10 @@ build_android_apk(
 $env:JAVA_HOME="E:\AIbendi\work\android-toolchain\jdk\jdk-17.0.21.1+2"
 $env:ANDROID_HOME="E:\AIbendi\work\android-toolchain\android-sdk"
 $env:GRADLE_USER_HOME="E:\AIbendi\work\android-toolchain\gradle-user-home"
-gradle.bat :app:assembleDebug
+.\gradlew.bat :app:assembleDebug
 ~~~
 
-项目没有 wrapper；用工具链里的 Gradle 8.9，或自己生成 wrapper。
+项目带 Gradle wrapper（8.9）；也可以直接用工具链里的 Gradle。
 
 ## 结构
 
@@ -42,7 +42,7 @@ app/src/main/java/com/creativeworkbench/writer/
   core/nav         WorkbenchModule / ModuleRegistry / NotesModule
   core/settings    主题/字号/模块开关
   core/backup      BackupBundle v1
-  ui/              书架 / 笔记 / 更多 / 编辑器占位
+  ui/              书架 / 目录 / 笔记 / 更多 / 分块编辑器
 ~~~
 
 产品文档（PRD v4.0、决策记录、S1-S5 工作流）在 E:\AIbendi\文学创作平台项目，与代码仓库分开放置，后续可合并为 monorepo。
@@ -52,8 +52,8 @@ app/src/main/java/com/creativeworkbench/writer/
 - 书架与 AI 在内核，不可关；唯一可关模块是「设定笔记」。
 - 不做运行时插件；导入包只含 AI 动作与提示词。
 - 每章 revision；首行缩进用 paddingStart；block 只有 {id, text}。
-- 正文最终用 EditText 分块编辑器；S1 只做数据层与骨架。
+- 正文用 EditText 分块编辑器（活动段单个 EditText）；S2 原型已接数据层，待真机 IME/性能验证。
 
 ## License
 
-GPL-3.0（LICENSE 待补；如果你希望 AGPL-3.0 告诉我）。
+GPL-3.0，见 LICENSE。如果你希望 AGPL-3.0，告诉我再换。

@@ -1,0 +1,228 @@
+package com.creativeworkbench.writer.ui.screens
+
+import android.app.Application
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.platform.LocalContext
+import com.creativeworkbench.writer.core.data.ChapterEntity
+import com.creativeworkbench.writer.ui.directory.DirectoryViewModel
+import com.creativeworkbench.writer.ui.directory.DirectoryViewModelFactory
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DirectoryScreen(
+    workId: String,
+    onOpenChapter: (String) -> Unit,
+    onBack: () -> Unit
+) {
+    val application = LocalContext.current.applicationContext as Application
+    val viewModel: DirectoryViewModel = viewModel(
+        key = "directory-" + workId,
+        factory = DirectoryViewModelFactory(application, workId)
+    )
+    val chapters by viewModel.chapters.collectAsStateWithLifecycle()
+    val work by viewModel.work.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
+    var showAdd by remember { mutableStateOf(false) }
+    var renameChapter by remember { mutableStateOf<ChapterEntity?>(null) }
+    var deleteChapter by remember { mutableStateOf<ChapterEntity?>(null) }
+
+    LaunchedEffect(Unit) {
+        viewModel.messages.collect { snackbar.showSnackbar(it) }
+    }
+
+    if (showAdd) {
+        NameDialog(
+            title = "新建章节",
+            initial = "第" + (chapters.size + 1) + "章",
+            onDismiss = { showAdd = false },
+            onConfirm = {
+                viewModel.addChapter(it)
+                showAdd = false
+            }
+        )
+    }
+    renameChapter?.let { chapter ->
+        NameDialog(
+            title = "章节改名",
+            initial = chapter.title,
+            onDismiss = { renameChapter = null },
+            onConfirm = {
+                viewModel.renameChapter(chapter.id, it)
+                renameChapter = null
+            }
+        )
+    }
+    deleteChapter?.let { chapter ->
+        AlertDialog(
+            onDismissRequest = { deleteChapter = null },
+            title = { Text("删除章节？") },
+            text = { Text("将删除「" + chapter.title + "」的正文与日志。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteChapter(chapter.id)
+                    deleteChapter = null
+                }) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteChapter = null }) { Text("取消") }
+            }
+        )
+    }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                title = { Text(work?.title ?: "作品目录") },
+                navigationIcon = {
+                    TextButton(onClick = onBack) { Text("返回") }
+                }
+            )
+        },
+        floatingActionButton = {
+            ExtendedFloatingActionButton(
+                text = { Text("新章节") },
+                icon = { Text("＋") },
+                onClick = { showAdd = true }
+            )
+        }
+    ) { padding ->
+        if (chapters.isEmpty()) {
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Text("还没有章节", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 96.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                itemsIndexed(chapters, key = { _, chapter -> chapter.id }) { index, chapter ->
+                    ChapterRow(
+                        index = index,
+                        chapter = chapter,
+                        onClick = { onOpenChapter(chapter.id) },
+                        onRename = { renameChapter = chapter },
+                        onDelete = { deleteChapter = chapter }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChapterRow(
+    index: Int,
+    chapter: ChapterEntity,
+    onClick: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit
+) {
+    var menu by remember { mutableStateOf(false) }
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                (index + 1).toString().padStart(2, '0'),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.width(30.dp)
+            )
+            Column(Modifier.weight(1f)) {
+                Text(chapter.title, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    chapter.wordCount.toString() + " 字",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Box {
+                TextButton(onClick = { menu = true }) { Text("…") }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("改名") },
+                        onClick = { menu = false; onRename() }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("删除") },
+                        onClick = { menu = false; onDelete() }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NameDialog(
+    title: String,
+    initial: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var value by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = value,
+                onValueChange = { value = it },
+                singleLine = true,
+                label = { Text("标题") }
+            )
+        },
+        confirmButton = {
+            TextButton(enabled = value.isNotBlank(), onClick = { onConfirm(value.trim()) }) {
+                Text("确定")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}

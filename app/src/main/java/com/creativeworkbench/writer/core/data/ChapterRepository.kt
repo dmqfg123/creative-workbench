@@ -103,7 +103,12 @@ class ChapterRepository(
     suspend fun openChapter(chapterId: String): OpenedChapter? = withContext(Dispatchers.IO) {
         writeMutex.withLock {
             var chapter = db.chapterDao().byId(chapterId) ?: return@withLock null
-            var content = files.read(chapterId)
+            var content = try {
+                files.read(chapterId)
+            } catch (error: Exception) {
+                // 文件损坏时不要用空章节覆盖；交给上层提示/导出备份。
+                return@withLock null
+            }
             if (content == null) {
                 content = ChapterContent(
                     chapterId = chapterId,
@@ -183,6 +188,50 @@ class ChapterRepository(
     suspend fun renameWork(workId: String, title: String) = withContext(Dispatchers.IO) {
         val work = db.workDao().byId(workId) ?: return@withContext
         db.workDao().update(work.copy(title = title.trim(), updatedAt = System.currentTimeMillis()))
+    }
+
+    suspend fun createChapter(workId: String, title: String): ChapterEntity? = withContext(Dispatchers.IO) {
+        writeMutex.withLock {
+            val work = db.workDao().byId(workId) ?: return@withLock null
+            val now = System.currentTimeMillis()
+            val chapter = ChapterEntity(
+                id = UUID.randomUUID().toString(),
+                workId = workId,
+                title = title.trim().ifEmpty { "新章" },
+                orderIndex = db.chapterDao().maxOrder(workId) + 1,
+                revision = 0L,
+                updatedAt = now
+            )
+            db.chapterDao().insert(chapter)
+            db.workDao().update(work.copy(chapterCount = work.chapterCount + 1, updatedAt = now))
+            files.write(
+                ChapterContent(
+                    chapterId = chapter.id,
+                    revision = 0L,
+                    blocks = listOf(Block(UUID.randomUUID().toString(), "")),
+                    updatedAt = now
+                )
+            )
+            chapter
+        }
+    }
+
+    suspend fun deleteChapter(chapterId: String) = withContext(Dispatchers.IO) {
+        writeMutex.withLock {
+            val chapter = db.chapterDao().byId(chapterId) ?: return@withLock
+            val work = db.workDao().byId(chapter.workId)
+            files.delete(chapterId)
+            db.chapterDao().delete(chapterId)
+            if (work != null) {
+                db.workDao().update(
+                    work.copy(
+                        chapterCount = (work.chapterCount - 1).coerceAtLeast(0),
+                        wordCount = (work.wordCount - chapter.wordCount).coerceAtLeast(0L),
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+            }
+        }
     }
 
     suspend fun renameChapter(chapterId: String, title: String) = withContext(Dispatchers.IO) {

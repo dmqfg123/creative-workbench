@@ -19,6 +19,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.creativeworkbench.writer.ui.screens.DirectoryScreen
 import com.creativeworkbench.writer.ui.screens.EditorScreen
 import com.creativeworkbench.writer.ui.screens.LibraryScreen
 import com.creativeworkbench.writer.ui.screens.MoreScreen
@@ -74,6 +75,7 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                         works = viewModel.works.collectAsStateWithLifecycle().value,
                         onCreateWork = viewModel::createWork,
                         onOpenWork = viewModel::openWork,
+                        onOpenDirectory = { workId -> navController.navigate("directory/" + workId) },
                         onDeleteWork = viewModel::deleteWork
                     )
                 }
@@ -83,14 +85,24 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                 composable("more") {
                     MoreScreen(viewModel = viewModel, settings = settings)
                 }
+                composable("directory/{workId}") { entry ->
+                    val workId = entry.arguments?.getString("workId").orEmpty()
+                    DirectoryScreen(
+                        workId = workId,
+                        onOpenChapter = { chapterId ->
+                            navController.navigate("editor/" + workId + "/" + chapterId)
+                        },
+                        onBack = { navController.popBackStack() }
+                    )
+                }
                 composable("editor/{workId}/{chapterId}") { entry ->
                     val workId = entry.arguments?.getString("workId").orEmpty()
                     val chapterId = entry.arguments?.getString("chapterId").orEmpty()
                     EditorScreen(
                         workId = workId,
                         chapterId = chapterId,
-                        viewModel = viewModel,
-                        onBack = { navController.popBackStack() }
+                        onBack = { navController.popBackStack() },
+                        onOpenDirectory = { navController.navigate("directory/" + workId) }
                     )
                 }
             }
