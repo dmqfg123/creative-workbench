@@ -1043,6 +1043,14 @@ private fun ActiveBlockEditor(
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
             override fun afterTextChanged(s: Editable?) {
                 if (suppress.get()) return
+                val inputAtNanos = android.os.SystemClock.elapsedRealtimeNanos()
+                // 输入到下一帧的耗时（不含输入法内部处理），用于 WB_PERF 复测。
+                editText.postOnAnimation {
+                    android.util.Log.i(
+                        "WB_PERF",
+                        "input_ms=" + ((android.os.SystemClock.elapsedRealtimeNanos() - inputAtNanos) / 1_000_000.0)
+                    )
+                }
                 val text = s?.toString().orEmpty()
                 val newline = text.indexOf('\n')
                 if (newline >= 0) {
