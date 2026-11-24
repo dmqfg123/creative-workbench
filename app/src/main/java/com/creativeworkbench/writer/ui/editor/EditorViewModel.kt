@@ -45,6 +45,7 @@ class EditorViewModel(
 
     private val undoStack = ArrayDeque<UndoEntry>()
     private val redoStack = ArrayDeque<UndoEntry>()
+    private val blockWordCounts = HashMap<String, Long>()
     private var saveJob: Job? = null
     private var maxWaitJob: Job? = null
     private var journalJob: Job? = null
@@ -57,14 +58,22 @@ class EditorViewModel(
 
     private fun load() {
         viewModelScope.launch {
-            when (val result = repository.openChapterResult(chapterId)) {
+            val loaded = runCatching { repository.openChapterResult(chapterId) }.getOrElse { error ->
+                _state.value = EditorUiState(
+                    loading = false,
+                    error = "打开章节失败：" + (error.message ?: error.javaClass.simpleName)
+                )
+                return@launch
+            }
+            when (loaded) {
                 is com.creativeworkbench.writer.core.data.OpenChapterResult.Ok -> {
-                    val opened = result.opened
+                    val opened = loaded.opened
+                    val total = refreshWordCounts(opened.content.blocks)
                     _state.value = EditorUiState(
                         chapterTitle = opened.chapter.title,
                         blocks = opened.content.blocks,
                         revision = opened.chapter.revision,
-                        wordCount = repository.countWords(opened.content.blocks),
+                        wordCount = total,
                         loading = false
                     )
                 }
@@ -90,11 +99,16 @@ class EditorViewModel(
     }
 
     fun onTextChanged(blockId: String, text: String) {
+        val oldBlock = _state.value.blocks.firstOrNull { it.id == blockId }
+        val oldCount = blockWordCounts[blockId] ?: oldBlock?.let { repository.countWords(listOf(it)) } ?: 0L
+        val newCount = repository.countWords(listOf(Block(blockId, text)))
+        blockWordCounts[blockId] = newCount
         val blocks = _state.value.blocks.map { if (it.id == blockId) it.copy(text = text) else it }
+        val total = (_state.value.wordCount - oldCount + newCount).coerceAtLeast(0L)
         _state.update {
             it.copy(
                 blocks = blocks,
-                wordCount = repository.countWords(blocks),
+                wordCount = total,
                 dirty = true,
                 error = null
             )
@@ -148,7 +162,7 @@ class EditorViewModel(
         _state.update {
             it.copy(
                 blocks = entry.before,
-                wordCount = repository.countWords(entry.before),
+                wordCount = refreshWordCounts(entry.before),
                 dirty = true,
                 activeBlockId = entry.before.firstOrNull { block -> block.id == it.activeBlockId }?.id
                     ?: entry.before.firstOrNull()?.id,
@@ -166,7 +180,7 @@ class EditorViewModel(
         _state.update {
             it.copy(
                 blocks = entry.after,
-                wordCount = repository.countWords(entry.after),
+                wordCount = refreshWordCounts(entry.after),
                 dirty = true,
                 activeBlockId = entry.after.firstOrNull { block -> block.id == it.activeBlockId }?.id
                     ?: entry.after.firstOrNull()?.id,
@@ -189,6 +203,17 @@ class EditorViewModel(
         }
     }
 
+    private fun refreshWordCounts(blocks: List<Block>): Long {
+        blockWordCounts.clear()
+        var total = 0L
+        blocks.forEach { block ->
+            val count = repository.countWords(listOf(block))
+            blockWordCounts[block.id] = count
+            total += count
+        }
+        return total
+    }
+
     private fun apply(command: EditCommand) {
         val entry = EditEngine.apply(_state.value.blocks, command) ?: return
         undoStack.addLast(entry)
@@ -196,7 +221,7 @@ class EditorViewModel(
         _state.update {
             it.copy(
                 blocks = entry.after,
-                wordCount = repository.countWords(entry.after),
+                wordCount = refreshWordCounts(entry.after),
                 dirty = true,
                 undoAvailable = true,
                 redoAvailable = false,
@@ -232,13 +257,24 @@ class EditorViewModel(
         if (!snapshot.dirty || snapshot.saving) return
         val version = editVersion
         _state.update { it.copy(saving = true) }
-        when (val result = repository.saveChapter(chapterId, snapshot.blocks, snapshot.revision, UpdateSource.UserInput)) {
+        val saved = runCatching {
+            repository.saveChapter(chapterId, snapshot.blocks, snapshot.revision, UpdateSource.UserInput)
+        }.getOrElse { error ->
+            _state.update {
+                it.copy(
+                    saving = false,
+                    error = "保存失败：" + (error.message ?: error.javaClass.simpleName)
+                )
+            }
+            return
+        }
+        when (saved) {
             is SaveResult.Saved -> {
                 val stillDirty = editVersion != version
                 _state.update {
                     it.copy(
-                        revision = result.revision,
-                        wordCount = result.wordCount,
+                        revision = saved.revision,
+                        wordCount = saved.wordCount,
                         saving = false,
                         dirty = stillDirty
                     )

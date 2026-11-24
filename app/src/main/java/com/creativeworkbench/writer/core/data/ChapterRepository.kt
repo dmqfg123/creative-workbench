@@ -128,19 +128,53 @@ class ChapterRepository(
                 )
                 files.write(content)
             }
+            // 文件先写、DB 后写；如果中间崩溃，文件 revision 会领先。
+            // 以文件为准修复 DB 与作品总字数，避免覆盖已落盘的正文。
+            if (content.revision > chapter.revision) {
+                val oldWords = chapter.wordCount
+                val newWords = countWords(content.blocks)
+                chapter = chapter.copy(
+                    revision = content.revision,
+                    wordCount = newWords,
+                    updatedAt = content.updatedAt
+                )
+                db.chapterDao().update(chapter)
+                val work = db.workDao().byId(chapter.workId)
+                if (work != null) {
+                    db.workDao().update(
+                        work.copy(
+                            wordCount = (work.wordCount - oldWords + newWords).coerceAtLeast(0L),
+                            updatedAt = content.updatedAt
+                        )
+                    )
+                }
+            } else if (content.revision < chapter.revision) {
+                return@withLock OpenChapterResult.Corrupt("章节文件版本落后于数据库，已停止编辑")
+            }
             val records = files.readJournal(chapterId)
             if (records.isNotEmpty()) {
                 val blocks = applyJournal(content.blocks, records)
                 val now = System.currentTimeMillis()
                 val revision = chapter.revision + 1
+                val oldWords = chapter.wordCount
+                val newWords = countWords(blocks)
                 content = ChapterContent(chapterId, revision, blocks, now)
                 files.write(content)
                 chapter = chapter.copy(
                     revision = revision,
-                    wordCount = countWords(blocks),
+                    wordCount = newWords,
                     updatedAt = now
                 )
                 db.chapterDao().update(chapter)
+                val work = db.workDao().byId(chapter.workId)
+                if (work != null) {
+                    db.workDao().update(
+                        work.copy(
+                            wordCount = (work.wordCount - oldWords + newWords).coerceAtLeast(0L),
+                            updatedAt = now
+                        )
+                    )
+                }
                 files.clearJournal(chapterId)
             }
             OpenChapterResult.Ok(OpenedChapter(chapter, content))
@@ -238,7 +272,6 @@ class ChapterRepository(
         writeMutex.withLock {
             val chapter = db.chapterDao().byId(chapterId) ?: return@withLock
             val work = db.workDao().byId(chapter.workId)
-            files.delete(chapterId)
             db.chapterDao().delete(chapterId)
             if (work != null) {
                 db.workDao().update(
@@ -249,6 +282,7 @@ class ChapterRepository(
                     )
                 )
             }
+            files.delete(chapterId)
         }
     }
 
@@ -270,8 +304,8 @@ class ChapterRepository(
     suspend fun deleteWork(workId: String) = withContext(Dispatchers.IO) {
         writeMutex.withLock {
             val chapters = db.chapterDao().listByWork(workId)
-            chapters.forEach { files.delete(it.id) }
             db.workDao().delete(workId)
+            chapters.forEach { files.delete(it.id) }
         }
     }
 

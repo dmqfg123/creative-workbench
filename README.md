@@ -4,9 +4,9 @@
 
 ## 状态
 
-- 版本：0.1.0（S1 + S2 + S3 原型）
+- 版本：0.2.0（S1 + S2 + S3 原型，含同类源码优化）
 - 构建：AGP 8.5.2 / Gradle 8.9 / Kotlin 2.0.21 / compileSdk 34 / minSdk 29
-- 未装机验证（当前没有接 adb 真机）；单元测试 9 条通过。
+- 未装机验证（当前没有接 adb 真机）；单元测试 13 条通过；lint 0 error。
 
 ## 构建
 
@@ -43,6 +43,7 @@ app/src/main/java/com/creativeworkbench/writer/
   core/settings    主题/字号/模块开关
   core/backup      BackupBundle v1
   ui/              书架 / 目录 / 笔记 / 更多 / 分块编辑器
+app/schemas/       Room schema（升级时必须写 Migration）
 ~~~
 
 产品文档（PRD v4.0、决策记录、S1-S5 工作流）在 E:\AIbendi\文学创作平台项目，与代码仓库分开放置，后续可合并为 monorepo。

@@ -38,35 +38,51 @@ class DirectoryViewModel(
 
     fun addChapter(title: String) {
         viewModelScope.launch {
-            val chapter = repository.createChapter(workId, title)
-            if (chapter == null) {
-                _messages.emit("创建章节失败")
-            } else {
-                _messages.emit("已创建「" + chapter.title + "」")
-                _work.value = repository.work(workId)
+            try {
+                val chapter = repository.createChapter(workId, title)
+                if (chapter == null) {
+                    _messages.emit("创建章节失败")
+                } else {
+                    _messages.emit("已创建「" + chapter.title + "」")
+                    _work.value = repository.work(workId)
+                }
+            } catch (error: Exception) {
+                _messages.emit("创建章节失败：" + (error.message ?: "存储错误"))
             }
         }
     }
 
     fun renameChapter(chapterId: String, title: String) {
         viewModelScope.launch {
-            repository.renameChapter(chapterId, title)
-            _messages.emit("已改名")
+            try {
+                repository.renameChapter(chapterId, title)
+                _messages.emit("已改名")
+            } catch (error: Exception) {
+                _messages.emit("改名失败：" + (error.message ?: "存储错误"))
+            }
         }
     }
 
     fun deleteChapter(chapterId: String) {
         viewModelScope.launch {
-            repository.deleteChapter(chapterId)
-            _work.value = repository.work(workId)
-            _messages.emit("章节已删除")
+            try {
+                repository.deleteChapter(chapterId)
+                _work.value = repository.work(workId)
+                _messages.emit("章节已删除")
+            } catch (error: Exception) {
+                _messages.emit("删除失败：" + (error.message ?: "存储错误"))
+            }
         }
     }
 
     fun updateSummary(chapterId: String, summary: String) {
         viewModelScope.launch {
-            repository.updateSummary(chapterId, summary)
-            _messages.emit("摘要已保存")
+            try {
+                repository.updateSummary(chapterId, summary)
+                _messages.emit("摘要已保存")
+            } catch (error: Exception) {
+                _messages.emit("摘要保存失败：" + (error.message ?: "存储错误"))
+            }
         }
     }
 }

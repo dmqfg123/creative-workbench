@@ -73,41 +73,53 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun createWork(title: String) {
         viewModelScope.launch {
-            val work = chapterRepository.createWork(title)
-            _appState.value = _appState.value.copy(
-                currentWorkId = work.id,
-                currentChapterId = null
-            )
-            val chapter = chapterRepository.chapters(work.id).firstOrNull()
-            if (chapter != null) {
-                _appState.value = _appState.value.copy(currentChapterId = chapter.id)
-                _events.emit(AppEvent.OpenEditor(work.id, chapter.id))
-            } else {
-                _events.emit(AppEvent.Toast("作品已创建"))
+            try {
+                val work = chapterRepository.createWork(title)
+                _appState.value = _appState.value.copy(
+                    currentWorkId = work.id,
+                    currentChapterId = null
+                )
+                val chapter = chapterRepository.chapters(work.id).firstOrNull()
+                if (chapter != null) {
+                    _appState.value = _appState.value.copy(currentChapterId = chapter.id)
+                    _events.emit(AppEvent.OpenEditor(work.id, chapter.id))
+                } else {
+                    _events.emit(AppEvent.Toast("作品已创建"))
+                }
+            } catch (error: Exception) {
+                _events.emit(AppEvent.Toast("创建失败：" + (error.message ?: "存储错误")))
             }
         }
     }
 
     fun openWork(workId: String) {
         viewModelScope.launch {
-            val chapter = chapterRepository.ensureFirstChapter(workId)
-            if (chapter == null) {
-                _events.emit(AppEvent.Toast("作品不存在"))
-                return@launch
+            try {
+                val chapter = chapterRepository.ensureFirstChapter(workId)
+                if (chapter == null) {
+                    _events.emit(AppEvent.Toast("作品不存在"))
+                    return@launch
+                }
+                chapterRepository.touchWork(workId)
+                _appState.value = _appState.value.copy(currentWorkId = workId, currentChapterId = chapter.id)
+                _events.emit(AppEvent.OpenEditor(workId, chapter.id))
+            } catch (error: Exception) {
+                _events.emit(AppEvent.Toast("打开失败：" + (error.message ?: "存储错误")))
             }
-            chapterRepository.touchWork(workId)
-            _appState.value = _appState.value.copy(currentWorkId = workId, currentChapterId = chapter.id)
-            _events.emit(AppEvent.OpenEditor(workId, chapter.id))
         }
     }
 
     fun deleteWork(workId: String) {
         viewModelScope.launch {
-            chapterRepository.deleteWork(workId)
-            if (_appState.value.currentWorkId == workId) {
-                _appState.value = _appState.value.copy(currentWorkId = null, currentChapterId = null)
+            try {
+                chapterRepository.deleteWork(workId)
+                if (_appState.value.currentWorkId == workId) {
+                    _appState.value = _appState.value.copy(currentWorkId = null, currentChapterId = null)
+                }
+                _events.emit(AppEvent.Toast("作品已删除"))
+            } catch (error: Exception) {
+                _events.emit(AppEvent.Toast("删除失败：" + (error.message ?: "存储错误")))
             }
-            _events.emit(AppEvent.Toast("作品已删除"))
         }
     }
 

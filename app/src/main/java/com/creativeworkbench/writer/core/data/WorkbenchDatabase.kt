@@ -15,7 +15,7 @@ import androidx.room.RoomDatabase
         SnapshotEntity::class
     ],
     version = 1,
-    exportSchema = false
+    exportSchema = true
 )
 abstract class WorkbenchDatabase : RoomDatabase() {
     abstract fun workDao(): WorkDao
@@ -27,8 +27,9 @@ abstract class WorkbenchDatabase : RoomDatabase() {
 
     companion object {
         fun create(context: Context): WorkbenchDatabase =
+            // 不再使用 fallbackToDestructiveMigration：schema 升级必须显式写 Migration，
+            // 否则宁可启动失败，也不能静默清库。v1 的 schema 已导出到 app/schemas/。
             Room.databaseBuilder(context.applicationContext, WorkbenchDatabase::class.java, "workbench.db")
-                .fallbackToDestructiveMigration()
                 .build()
     }
 }

@@ -1,6 +1,7 @@
 package com.creativeworkbench.writer.ui.screens
 
 import android.app.Application
+import android.content.Context
 import android.graphics.Color as AndroidColor
 import android.text.Editable
 import android.text.InputType
@@ -10,9 +11,12 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputConnectionWrapper
 import android.widget.EditText
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,10 +26,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -43,10 +49,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -57,6 +66,11 @@ import com.creativeworkbench.writer.core.data.Block
 import com.creativeworkbench.writer.core.settings.FontSizePreset
 import com.creativeworkbench.writer.ui.editor.EditorViewModel
 import com.creativeworkbench.writer.ui.editor.EditorViewModelFactory
+import com.creativeworkbench.writer.ui.editor.FocusScrollTarget
+import com.creativeworkbench.writer.ui.editor.VisibleBlockBounds
+import com.creativeworkbench.writer.ui.editor.focusedBlockScrollTarget
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import java.util.concurrent.atomic.AtomicBoolean
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -85,6 +99,36 @@ fun EditorScreen(
         factory = EditorViewModelFactory(application, chapterId)
     )
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val listState = rememberLazyListState()
+    val density = LocalDensity.current
+    val bottomMarginPx = with(density) { 12.dp.roundToPx() }
+
+    LaunchedEffect(state.activeBlockId) {
+        val activeId = state.activeBlockId ?: return@LaunchedEffect
+        snapshotFlow { listState.layoutInfo.viewportEndOffset }
+            .distinctUntilChanged()
+            .collectLatest {
+                val index = state.blocks.indexOfFirst { block -> block.id == activeId }
+                if (index < 0) return@collectLatest
+                withFrameNanos { }
+                val info = listState.layoutInfo
+                if (info.visibleItemsInfo.isEmpty()) return@collectLatest
+                val target = focusedBlockScrollTarget(
+                    focusedIndex = index,
+                    visibleItems = info.visibleItemsInfo.map { item ->
+                        VisibleBlockBounds(item.index, item.offset, item.size)
+                    },
+                    viewportStartOffset = info.viewportStartOffset,
+                    viewportEndOffset = info.viewportEndOffset,
+                    bottomMarginPx = bottomMarginPx
+                )
+                when (target) {
+                    is FocusScrollTarget.By -> listState.animateScrollBy(target.deltaPx.toFloat())
+                    is FocusScrollTarget.ToItem -> listState.animateScrollToItem(target.index, target.scrollOffset)
+                    null -> Unit
+                }
+            }
+    }
 
     BackHandler { viewModel.flushAndBack(onBack) }
 
@@ -132,9 +176,18 @@ fun EditorScreen(
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("正在打开章节…")
                 }
+            } else if (state.error != null && state.blocks.isEmpty()) {
+                Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                    Text(
+                        state.error ?: "章节无法打开",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             } else {
                 LazyColumn(
-                    modifier = Modifier.weight(1f),
+                    state = listState,
+                    modifier = Modifier.weight(1f).imePadding(),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 32.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
@@ -255,7 +308,7 @@ private fun ActiveBlockEditor(
     val suppress = remember { AtomicBoolean(false) }
 
     val editText = remember(block.id, textSizeSp, lineHeightSp) {
-        EditText(context).apply {
+        BlockEditText(context).apply {
             setBackgroundColor(AndroidColor.TRANSPARENT)
             setPadding(0, 0, 0, 0)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
@@ -276,10 +329,23 @@ private fun ActiveBlockEditor(
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
             override fun afterTextChanged(s: Editable?) {
-                if (!suppress.get()) currentOnTextChange(s?.toString().orEmpty())
+                if (suppress.get()) return
+                val text = s?.toString().orEmpty()
+                val newline = text.indexOf('\n')
+                if (newline >= 0) {
+                    // 软键盘回车通常不走 onKeyDown，只会 commit 一个换行；
+                    // 在这里删掉换行并请求拆段，避免正文里出现段内换行。
+                    suppress.set(true)
+                    s?.delete(newline, newline + 1)
+                    suppress.set(false)
+                    currentOnSplitAt(newline)
+                } else {
+                    currentOnTextChange(text)
+                }
             }
         }
         editText.addTextChangedListener(watcher)
+        editText.onBackspaceAtStart = { currentOnMergePrevious() }
         editText.setOnKeyListener { _, keyCode, event ->
             if (event.action != KeyEvent.ACTION_DOWN) {
                 false
@@ -299,6 +365,7 @@ private fun ActiveBlockEditor(
         onDispose {
             editText.removeTextChangedListener(watcher)
             editText.setOnKeyListener(null)
+            editText.onBackspaceAtStart = null
         }
     }
 
@@ -322,4 +389,37 @@ private fun ActiveBlockEditor(
             view.setTextColor(textColor)
         }
     )
+}
+/**
+ * 软键盘的退格在段首不会触发 OnKeyListener；用 InputConnectionWrapper
+ * 拦截 deleteSurroundingText 作为补充。剩下少数输入法仍可能不发删除事件，
+ * 所以段落菜单始终保留「合并到上一段」兜底。
+ */
+private class BlockEditText(context: Context) : EditText(context) {
+    var onBackspaceAtStart: (() -> Unit)? = null
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
+        val base = super.onCreateInputConnection(outAttrs) ?: return null
+        return object : InputConnectionWrapper(base, false) {
+            override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+                if (tryBackspaceAtStart(beforeLength, afterLength)) return true
+                return super.deleteSurroundingText(beforeLength, afterLength)
+            }
+
+            override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
+                if (tryBackspaceAtStart(beforeLength, afterLength)) return true
+                return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
+            }
+
+            private fun tryBackspaceAtStart(beforeLength: Int, afterLength: Int): Boolean {
+                if (beforeLength == 1 && afterLength == 0 &&
+                    selectionStart == 0 && selectionEnd == 0
+                ) {
+                    onBackspaceAtStart?.invoke()
+                    return true
+                }
+                return false
+            }
+        }
+    }
 }

@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## 0.2.0（2026-11-24）同类源码拆解后的优化
+
+- 参考 cascade-editor：LazyColumn `imePadding`；聚焦块最小滚动（可见不动、被裁只滚 delta、未组合才 scrollToItem），附 4 条纯函数单测。
+- 参考 字隅（3Cne/ziyu）：软键盘回车用 TextWatcher 去掉 `\n` 并拆段；段首退格用 InputConnectionWrapper 拦截 `deleteSurroundingText` / `deleteSurroundingTextInCodePoints`，菜单保留兜底。
+- 性能：字数改为增量维护，只算当前段；结构操作/撤销才全量刷新。
+- 数据安全：文件 revision 领先 DB 时以文件为准修复 DB/作品总字数；删除先 DB 后文件；损坏/保存失败不再渲染空编辑器，也不吞异常。
+- Room：导出 schema 到 app/schemas；移除 fallbackToDestructiveMigration，升级必须显式 Migration。
+- 单测 13 条通过；lint 0 error。
+- 参考但不照抄：Aria 的 PromptTemplate/JSON 输出留到 S4；Writeopia 的 AI 任务管理/流式不做；Quillpad 的备份/迁移测试留到 S5；hammer 的 revision/UpdateSource 继续沿用。
+
 ## 0.1.0（2026-11-24）S1 骨架
 
 - Android 工程：AGP 8.5.2 / Gradle 8.9 / Kotlin 2.0.21 / compileSdk 34 / targetSdk 34 / minSdk 29。
