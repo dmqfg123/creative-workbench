@@ -174,7 +174,6 @@ fun DirectoryScreen(
     val continueChapter = chapters.firstOrNull { it.id == currentChapterId } ?: chapters.lastOrNull()
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
@@ -272,6 +271,12 @@ fun DirectoryScreen(
                     text = { Text("新章节", fontWeight = FontWeight.Medium) }
                 )
             }
+
+            // 提示条抬到 FAB 上方：既不挡按钮，也不挡章节列表最后一项
+            SnackbarHost(
+                hostState = snackbar,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp)
+            )
         }
     }
 

@@ -52,6 +52,7 @@ import com.creativeworkbench.writer.core.data.NoteKind
 import com.creativeworkbench.writer.core.data.WorkEntity
 import com.creativeworkbench.writer.ui.components.ActionSheet
 import com.creativeworkbench.writer.ui.components.SheetAction
+import com.creativeworkbench.writer.ui.design.ChipRow
 import com.creativeworkbench.writer.ui.design.IconAction
 import com.creativeworkbench.writer.ui.design.PillButton
 import com.creativeworkbench.writer.ui.design.Tag
@@ -200,10 +201,7 @@ fun NoteDetailScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp)
         ) {
-            Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+            ChipRow {
                 NoteKind.all.forEach { option ->
                     Tag(
                         text = NoteKind.label(option),

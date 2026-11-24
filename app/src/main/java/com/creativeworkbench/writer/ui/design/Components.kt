@@ -4,6 +4,9 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +15,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -40,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -326,6 +331,58 @@ fun Tag(
             style = MaterialTheme.typography.labelMedium,
             color = fg,
             fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium
+        )
+    }
+}
+
+/**
+ * 横向滚动的胶囊行。裁切边缘加渐隐：右边还能滚时，最后半个 chip 淡出，
+ * 用户一眼看出「还有」；滚到底渐隐自动消失，不长期挡内容。
+ * 渐隐在 draw 阶段直接画在内容之上——LazyColumn 给 item 的是无界高度约束，
+ * 用嵌套 Box + fillMaxHeight 量出来是 0，画不出来。
+ */
+@Composable
+fun ChipRow(
+    modifier: Modifier = Modifier,
+    content: @Composable RowScope.() -> Unit
+) {
+    val scroll = rememberScrollState()
+    val background = MaterialTheme.colorScheme.background
+    val edge = 28.dp
+    Box(
+        modifier
+            .fillMaxWidth()
+            .drawWithContent {
+                drawContent()
+                val fade = edge.toPx()
+                if (fade <= 0f) return@drawWithContent
+                if (scroll.value > 0) {
+                    drawRect(
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(background, Color.Transparent),
+                            startX = 0f,
+                            endX = fade
+                        ),
+                        size = Size(fade, size.height)
+                    )
+                }
+                if (scroll.canScrollForward) {
+                    drawRect(
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(Color.Transparent, background),
+                            startX = size.width - fade,
+                            endX = size.width
+                        ),
+                        topLeft = Offset(size.width - fade, 0f),
+                        size = Size(fade, size.height)
+                    )
+                }
+            }
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(scroll),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            content = content
         )
     }
 }

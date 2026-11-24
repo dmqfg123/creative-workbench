@@ -44,6 +44,7 @@ import com.creativeworkbench.writer.core.data.NoteKind
 import com.creativeworkbench.writer.core.data.WorkEntity
 import com.creativeworkbench.writer.ui.components.ActionSheet
 import com.creativeworkbench.writer.ui.components.SheetAction
+import com.creativeworkbench.writer.ui.design.ChipRow
 import com.creativeworkbench.writer.ui.design.EmptyState
 import com.creativeworkbench.writer.ui.design.IconAction
 import com.creativeworkbench.writer.ui.design.PageHeader
@@ -141,10 +142,7 @@ fun NotesScreen(
             }
             if (works.isNotEmpty()) {
                 item {
-                    Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
+                    ChipRow {
                         Tag("全部作品", active = workFilter == null, onClick = { workFilter = null })
                         works.forEach { work ->
                             Tag(work.title, active = workFilter == work.id, onClick = { workFilter = work.id })
@@ -153,10 +151,7 @@ fun NotesScreen(
                 }
             }
             item {
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+                ChipRow {
                     Tag("全部", active = kindFilter == "all", onClick = { kindFilter = "all" })
                     Tag("速记", active = kindFilter == "quick", onClick = { kindFilter = "quick" })
                     NoteKind.all.forEach { kind ->
