@@ -102,7 +102,8 @@ fun LibraryScreen(
     onOpenWork: (String) -> Unit,
     onOpenDirectory: (String) -> Unit,
     onRenameWork: (String, String) -> Unit,
-    onDeleteWork: (String) -> Unit,
+    onScheduleDelete: (String) -> Unit,
+    onCancelDelete: (String) -> Unit,
     onSaveQuickNote: (kind: String, content: String, tag: String?) -> Unit,
     onOpenNotes: (String?) -> Unit,
     onOpenLibrary: () -> Unit,
@@ -120,7 +121,7 @@ fun LibraryScreen(
     var pendingDeleteId by remember { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
 
-    // 删除 5 秒内可撤销：先隐藏，5 秒后才真正删。
+    // 删除 5 秒内可撤销：任务交给 ViewModel，切页面不会把删除弄丢。
     LaunchedEffect(pendingDeleteId) {
         val id = pendingDeleteId ?: return@LaunchedEffect
         val result = snackbar.showSnackbar(
@@ -129,9 +130,9 @@ fun LibraryScreen(
             duration = androidx.compose.material3.SnackbarDuration.Long
         )
         if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+            onCancelDelete(id)
             pendingDeleteId = null
         } else {
-            onDeleteWork(id)
             pendingDeleteId = null
         }
     }
@@ -351,6 +352,7 @@ fun LibraryScreen(
                     onClick = {
                         deleteTarget = null
                         pendingDeleteId = work.id
+                        onScheduleDelete(work.id)
                     },
                     colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
                         contentColor = MaterialTheme.colorScheme.error

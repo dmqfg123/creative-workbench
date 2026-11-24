@@ -176,6 +176,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val pendingDeletes = mutableMapOf<String, kotlinx.coroutines.Job>()
+
+    /** 5 秒撤销窗口放到 ViewModel：切页面/切 Tab 不会把待删任务取消掉。 */
+    fun scheduleDeleteWork(workId: String) {
+        pendingDeletes[workId]?.cancel()
+        pendingDeletes[workId] = viewModelScope.launch {
+            kotlinx.coroutines.delay(5000)
+            pendingDeletes.remove(workId)
+            deleteWork(workId)
+        }
+    }
+
+    fun cancelScheduledDelete(workId: String) {
+        pendingDeletes.remove(workId)?.cancel()
+    }
+
     fun deleteWork(workId: String) {
         viewModelScope.launch {
             try {

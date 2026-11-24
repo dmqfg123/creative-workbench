@@ -365,6 +365,8 @@ class ChapterRepository(
                 files.delete(chapter.id)
                 files.deleteSnapshots(chapter.id)
             }
+            // 人物/设定必须挂在作品上，作品没了就一起删，避免孤儿笔记。
+            db.noteDao().deleteByWork(workId)
         }
     }
 

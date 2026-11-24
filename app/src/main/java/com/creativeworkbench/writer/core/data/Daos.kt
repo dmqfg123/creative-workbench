@@ -75,6 +75,9 @@ interface NoteDao {
     @Query("UPDATE notes SET aiReference = :value, updatedAtMs = :now WHERE id = :id")
     suspend fun setAiReference(id: String, value: Boolean, now: Long)
 
+    @Query("DELETE FROM notes WHERE workId = :workId")
+    suspend fun deleteByWork(workId: String)
+
     @Query("DELETE FROM notes WHERE id = :id")
     suspend fun delete(id: String)
 

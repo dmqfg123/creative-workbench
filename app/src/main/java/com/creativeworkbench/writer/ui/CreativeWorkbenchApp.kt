@@ -113,7 +113,8 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                         onOpenWork = viewModel::openWork,
                         onOpenDirectory = { workId -> navController.navigate("directory/" + workId) },
                         onRenameWork = viewModel::renameWork,
-                        onDeleteWork = viewModel::deleteWork,
+                        onScheduleDelete = viewModel::scheduleDeleteWork,
+                        onCancelDelete = viewModel::cancelScheduledDelete,
                         onSaveQuickNote = { kind, content, tag ->
                             viewModel.saveQuickNote(kind, null, content, appState.currentWorkId)
                         },
