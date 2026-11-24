@@ -77,6 +77,7 @@ fun DataSettingsScreen(onBack: () -> Unit) {
     var clearText by remember { mutableStateOf("") }
     var pendingClear by remember { mutableStateOf(false) }
     var includeKey by remember { mutableStateOf(false) }
+    var showExportPicker by remember { mutableStateOf(false) }
     var confirmIncludeKey by remember { mutableStateOf(false) }
     var pendingImport by remember { mutableStateOf<BackupBundle?>(null) }
     var pendingPlugins by remember { mutableStateOf<Map<String, ByteArray>>(emptyMap()) }
@@ -116,7 +117,7 @@ fun DataSettingsScreen(onBack: () -> Unit) {
     ) { uri ->
         if (uri != null) {
             scope.launch {
-                val result = backup.exportBundleZip(uri)
+                val result = backup.exportBundleZip(uri, includeApiKey = includeKey)
                 val message = if (result.isSuccess) "迁移包已导出" else "导出失败：" + result.exceptionOrNull()?.message
                 Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
             }
@@ -229,6 +230,32 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                 )
             ),
             onDismiss = { formatPicker = false }
+        )
+    }
+
+    if (showExportPicker) {
+        ActionSheet(
+            title = "导出什么",
+            subtitle = "都存到你自己选的位置",
+            actions = listOf(
+                SheetAction(
+                    label = "全量备份（.json.gz）",
+                    description = if (includeKey) "含 API 密钥；可导入恢复" else "不含密钥；可导入恢复",
+                    onClick = {
+                        showExportPicker = false
+                        exportLauncher.launch("雨刮模拟器备份.json.gz")
+                    }
+                ),
+                SheetAction(
+                    label = "整机迁移包（.zip）",
+                    description = "备份 + 动作包；换手机时整包搬过去",
+                    onClick = {
+                        showExportPicker = false
+                        zipExportLauncher.launch("雨刮模拟器-迁移包.zip")
+                    }
+                )
+            ),
+            onDismiss = { showExportPicker = false }
         )
     }
 
@@ -365,13 +392,24 @@ fun DataSettingsScreen(onBack: () -> Unit) {
 
             SectionLabel("备份")
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                PillButton(text = "导出全量备份", onClick = { exportLauncher.launch("雨刮模拟器备份.json.gz") })
+                PillButton(text = "立即备份", onClick = {
+                    scope.launch {
+                        val local = runCatching { backup.writeLocalBackup() }.getOrNull()
+                        localFiles = backup.localBackups()
+                        lastBackup = System.currentTimeMillis()
+                        val public = backup.writeDailyPublicBackup()
+                        lastSafAt = System.currentTimeMillis()
+                        val publicText = public.fold({ "Download 一份" }, { "Download 失败" })
+                        Toast.makeText(
+                            context,
+                            (if (local != null) "已备份：本机 " + local.name + " + " + publicText else "本机备份失败"),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                })
+                GhostButton(text = "导出…", onClick = { showExportPicker = true })
                 GhostButton(text = "导入恢复", onClick = { importLauncher.launch(arrayOf("application/zip", "application/gzip", "application/json", "application/octet-stream")) })
             }
-            Spacer(Modifier.height(8.dp))
-            GhostButton(text = "导出整机迁移包（含动作包）", onClick = {
-                zipExportLauncher.launch("雨刮模拟器-迁移包.zip")
-            })
             Spacer(Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -392,16 +430,6 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                     }
                 )
             }
-            Spacer(Modifier.height(8.dp))
-            TextButton(onClick = {
-                scope.launch {
-                    val file = backup.writeLocalBackup()
-                    localFiles = backup.localBackups()
-                    lastBackup = System.currentTimeMillis()
-                    Toast.makeText(context, "已备份：" + file.name, Toast.LENGTH_SHORT).show()
-                }
-            }) { Text("立即在本机备份一份") }
-
             localFiles.take(3).forEach { file ->
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -446,25 +474,6 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(Modifier.height(8.dp))
-            GhostButton(
-                text = "立即备份一份",
-                onClick = {
-                    scope.launch {
-                        val result = backup.writeDailyPublicBackup()
-                        lastSafAt = System.currentTimeMillis()
-                        Toast.makeText(
-                            context,
-                            result.fold(
-                                { "已备份到 Download/雨刮模拟器备份/" + it },
-                                { "备份失败：" + (it.message ?: "") }
-                            ),
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }
-                }
-            )
-
             SectionLabel("单部作品")
             GhostButton(text = "导出作品 TXT / Markdown", onClick = { workPicker = true })
 

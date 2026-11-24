@@ -1,5 +1,9 @@
 package com.creativeworkbench.writer.ui.design
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -39,6 +43,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -56,6 +65,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.creativeworkbench.writer.ui.theme.Motion
 
 /** 页面标题：大标题 + 一行副标题 + 右侧图标动作。所有一级页统一用这个。 */
 @Composable
@@ -207,23 +217,31 @@ fun EmptyState(
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null
 ) {
-    Column(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 36.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+    var appeared by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { appeared = true }
+    AnimatedVisibility(
+        visible = appeared,
+        enter = fadeIn(tween(Motion.Medium)) +
+            slideInVertically(tween(Motion.Medium, easing = Motion.EmphasizedDecelerate)) { it / 12 }
     ) {
-        PaperMark()
-        Spacer(Modifier.height(20.dp))
-        Text(title, style = MaterialTheme.typography.titleLarge)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-        if (actionLabel != null && onAction != null) {
+        Column(
+            modifier = modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 36.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            PaperMark()
             Spacer(Modifier.height(20.dp))
-            PillButton(text = actionLabel, onClick = onAction)
+            Text(title, style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+            if (actionLabel != null && onAction != null) {
+                Spacer(Modifier.height(20.dp))
+                PillButton(text = actionLabel, onClick = onAction)
+            }
         }
     }
 }

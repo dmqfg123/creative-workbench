@@ -208,7 +208,11 @@ fun NotesScreen(
                 else -> {
                     item { SectionLabel("共 " + filtered.size + " 条") }
                     items(filtered, key = { it.id }) { note ->
-                        NoteRow(note = note, onClick = { onOpenNote(note.id) })
+                        NoteRow(
+                            note = note,
+                            onClick = { onOpenNote(note.id) },
+                            modifier = Modifier.animateItem()
+                        )
                     }
                 }
             }
@@ -251,8 +255,8 @@ fun NotesScreen(
 }
 
 @Composable
-private fun NoteRow(note: NoteEntity, onClick: () -> Unit) {
-    WbCard(onClick = onClick, contentPadding = PaddingValues(14.dp)) {
+private fun NoteRow(note: NoteEntity, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    WbCard(onClick = onClick, modifier = modifier, contentPadding = PaddingValues(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Tag(NoteKind.label(note.kind), active = NoteKind.setting.contains(note.kind))
             Spacer(Modifier.width(10.dp))

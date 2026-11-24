@@ -67,6 +67,7 @@ import com.creativeworkbench.writer.ui.design.PillButton
 import com.creativeworkbench.writer.ui.design.SearchField
 import com.creativeworkbench.writer.ui.design.SectionLabel
 import com.creativeworkbench.writer.ui.design.WbCard
+import com.creativeworkbench.writer.ui.theme.Motion
 import com.creativeworkbench.writer.ui.directory.DirectoryViewModel
 import com.creativeworkbench.writer.ui.directory.DirectoryViewModelFactory
 
@@ -351,6 +352,26 @@ private fun ChapterRow(
     modifier: Modifier = Modifier
 ) {
     val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val background by androidx.compose.animation.animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        androidx.compose.animation.core.tween(Motion.Medium),
+        label = "chapterBackground"
+    )
+    val borderColor by androidx.compose.animation.animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else MaterialTheme.colorScheme.outline,
+        androidx.compose.animation.core.tween(Motion.Medium),
+        label = "chapterBorder"
+    )
+    val barHeight by androidx.compose.animation.core.animateDpAsState(
+        if (chapter.summary.isNullOrBlank()) 28.dp else 40.dp,
+        androidx.compose.animation.core.tween(Motion.Medium),
+        label = "chapterBarHeight"
+    )
+    val barColor by androidx.compose.animation.animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+        androidx.compose.animation.core.tween(Motion.Medium),
+        label = "chapterBarColor"
+    )
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -362,11 +383,8 @@ private fun ChapterRow(
                 onLongClick = onMenu
             ),
         shape = MaterialTheme.shapes.medium,
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-        border = BorderStroke(
-            1.dp,
-            if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else MaterialTheme.colorScheme.outline
-        )
+        color = background,
+        border = BorderStroke(1.dp, borderColor)
     ) {
         Row(
             modifier = Modifier.padding(start = 14.dp, top = 14.dp, bottom = 14.dp, end = 2.dp),
@@ -375,12 +393,8 @@ private fun ChapterRow(
             Box(
                 Modifier
                     .width(3.dp)
-                    .height(if (chapter.summary.isNullOrBlank()) 28.dp else 40.dp)
-                    .background(
-                        color = if (selected) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                        shape = RoundedCornerShape(2.dp)
-                    )
+                    .height(barHeight)
+                    .background(color = barColor, shape = RoundedCornerShape(2.dp))
             )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {

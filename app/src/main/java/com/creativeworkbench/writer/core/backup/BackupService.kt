@@ -100,9 +100,9 @@ class BackupService(
     }
 
     /** 整机迁移包：manifest + backup.json + plugins/。 */
-    suspend fun exportBundleZip(uri: Uri): Result<Int> = withContext(Dispatchers.IO) {
+    suspend fun exportBundleZip(uri: Uri, includeApiKey: Boolean = false): Result<Int> = withContext(Dispatchers.IO) {
         runCatching {
-            val bundle = buildBundle(includeApiKey = false)
+            val bundle = buildBundle(includeApiKey = includeApiKey)
             val backupJson = json.encodeToString(BackupBundle.serializer(), bundle)
             val plugins = readPluginFiles()
             val manifest = mapOf(

@@ -1,5 +1,10 @@
 package com.creativeworkbench.writer.ui.ai
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -40,6 +45,7 @@ import com.creativeworkbench.writer.core.ai.SelectionInfo
 import com.creativeworkbench.writer.ui.design.GhostButton
 import com.creativeworkbench.writer.ui.design.PillButton
 import com.creativeworkbench.writer.ui.design.Tag
+import com.creativeworkbench.writer.ui.theme.Motion
 
 /**
  * AI 面板：动作 → 上下文预览 → 生成 → 结果 → 确认写入。
@@ -221,7 +227,12 @@ fun AiPanel(
                     )
                 }
             }
-            if (state.resultText.isNotBlank() && !state.generating) {
+            AnimatedVisibility(
+                visible = state.resultText.isNotBlank() && !state.generating,
+                enter = fadeIn(tween(Motion.Medium)) +
+                    slideInVertically(tween(Motion.Medium, easing = Motion.EmphasizedDecelerate)) { it / 10 },
+                exit = fadeOut(tween(Motion.Fast))
+            ) {
                 Spacer(Modifier.height(14.dp))
                 if (action?.id == AiActions.REWRITE || action?.id == AiActions.CHECK) {
                     if (selection != null) {
