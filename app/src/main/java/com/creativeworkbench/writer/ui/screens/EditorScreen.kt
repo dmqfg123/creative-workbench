@@ -29,13 +29,39 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.ripple
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -54,20 +80,30 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.creativeworkbench.writer.R
 import com.creativeworkbench.writer.WorkbenchApp
 import com.creativeworkbench.writer.core.data.Block
 import com.creativeworkbench.writer.core.settings.FontSizePreset
+import com.creativeworkbench.writer.ui.components.ActionSheet
+import com.creativeworkbench.writer.ui.components.SheetAction
+import com.creativeworkbench.writer.ui.theme.Motion
 import com.creativeworkbench.writer.ui.editor.EditorViewModel
 import com.creativeworkbench.writer.ui.editor.EditorViewModelFactory
 import com.creativeworkbench.writer.ui.editor.FocusScrollTarget
@@ -109,6 +145,7 @@ fun EditorScreen(
     val keyboard = LocalSoftwareKeyboardController.current
     val bottomMarginPx = with(density) { 12.dp.roundToPx() }
     var menuOpen by remember { mutableStateOf(false) }
+    var blockMenuOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.activeBlockId) {
         val activeId = state.activeBlockId ?: return@LaunchedEffect
@@ -137,53 +174,55 @@ fun EditorScreen(
             }
     }
 
-    BackHandler { viewModel.flushAndBack(onBack) }
+    BackHandler {
+        keyboard?.hide()
+        viewModel.flushAndBack(onBack)
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(
-                            state.workTitle.ifBlank { state.chapterTitle.ifBlank { "编辑器" } },
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1
-                        )
-                        if (state.chapterTitle.isNotBlank()) {
-                            Text(
-                                state.chapterTitle,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
-                            )
-                        }
-                    }
+                    Text(
+                        state.workTitle.ifBlank { state.chapterTitle.ifBlank { "编辑器" } },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1
+                    )
                 },
                 navigationIcon = {
-                    TextButton(onClick = { viewModel.flushAndBack(onBack) }) { Text("返回") }
+                    IconButton(
+                        onClick = {
+                            keyboard?.hide()
+                            viewModel.flushAndBack(onBack)
+                        },
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "返回",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 },
                 actions = {
-                    Box {
-                        TextButton(onClick = { menuOpen = true }) { Text("⋯") }
-                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            DropdownMenuItem(
-                                text = { Text("作品目录") },
-                                onClick = {
-                                    menuOpen = false
-                                    viewModel.flushAndBack(onOpenDirectory)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("立即保存") },
-                                onClick = {
-                                    menuOpen = false
-                                    viewModel.flush()
-                                }
-                            )
-                        }
+                    IconButton(
+                        onClick = {
+                            keyboard?.hide()
+                            menuOpen = true
+                        },
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.MoreVert,
+                            contentDescription = "更多",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
                     }
-                }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background
+                )
             )
         }
     ) { padding ->
@@ -214,7 +253,12 @@ fun EditorScreen(
                             saving = state.saving,
                             dirty = state.dirty,
                             error = state.error,
-                            empty = state.blocks.all { it.text.isBlank() }
+                            empty = state.blocks.all { it.text.isBlank() },
+                            onStartWriting = {
+                                state.blocks.firstOrNull()?.let { block ->
+                                    viewModel.activate(block.id, 0)
+                                }
+                            }
                         )
                     }
                     itemsIndexed(state.blocks, key = { _, block -> block.id }) { _, block ->
@@ -240,33 +284,90 @@ fun EditorScreen(
                         TextButton(
                             onClick = { viewModel.insertAfter(state.blocks.lastOrNull()?.id.orEmpty()) },
                             modifier = Modifier.fillMaxWidth()
-                        ) { Text("＋ 新段落") }
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("继续写下一段")
+                        }
                     }
                 }
-                BottomEditorBar(
-                    activeBlockId = state.activeBlockId,
-                    undoAvailable = state.undoAvailable,
-                    redoAvailable = state.redoAvailable,
-                    onUndo = viewModel::undo,
-                    onRedo = viewModel::redo,
-                    onAdd = {
-                        val id = state.activeBlockId ?: state.blocks.lastOrNull()?.id
-                        if (id != null) viewModel.insertAfter(id)
-                    },
-                    onMoveUp = {
-                        state.activeBlockId?.let { viewModel.move(it, -1) }
-                    },
-                    onMoveDown = {
-                        state.activeBlockId?.let { viewModel.move(it, 1) }
-                    },
-                    onDelete = {
-                        state.activeBlockId?.let { viewModel.remove(it) }
-                    },
-                    onHideKeyboard = { keyboard?.hide() },
-                    hasActiveBlock = state.activeBlockId != null
-                )
+
+                AnimatedVisibility(
+                    visible = !state.loading,
+                    enter = slideInVertically(
+                        animationSpec = tween(Motion.Medium, easing = Motion.EmphasizedDecelerate)
+                    ) { fullHeight -> fullHeight } + fadeIn(tween(Motion.Fast)),
+                    exit = slideOutVertically(
+                        animationSpec = tween(Motion.Fast, easing = Motion.EmphasizedAccelerate)
+                    ) { fullHeight -> fullHeight } + fadeOut(tween(Motion.Fast))
+                ) {
+                    EditorToolbar(
+                        undoAvailable = state.undoAvailable,
+                        redoAvailable = state.redoAvailable,
+                        hasActiveBlock = state.activeBlockId != null,
+                        onUndo = viewModel::undo,
+                        onRedo = viewModel::redo,
+                        onAdd = {
+                            val id = state.activeBlockId ?: state.blocks.lastOrNull()?.id
+                            if (id != null) viewModel.insertAfter(id)
+                        },
+                        onParagraph = {
+                            keyboard?.hide()
+                            blockMenuOpen = true
+                        },
+                        onHideKeyboard = { keyboard?.hide() }
+                    )
+                }
             }
         }
+    }
+
+    if (menuOpen) {
+        ActionSheet(
+            title = state.chapterTitle.ifBlank { "章节" },
+            subtitle = state.wordCount.toString() + " 字",
+            actions = listOf(
+                SheetAction(
+                    label = "作品目录",
+                    icon = Icons.Default.List,
+                    onClick = {
+                        keyboard?.hide()
+                        viewModel.flushAndBack(onOpenDirectory)
+                    }
+                ),
+                SheetAction(
+                    label = "立即保存",
+                    icon = Icons.Default.Check,
+                    onClick = { viewModel.flush() }
+                )
+            ),
+            onDismiss = { menuOpen = false }
+        )
+    }
+
+    if (blockMenuOpen) {
+        ActionSheet(
+            title = "本段操作",
+            actions = listOf(
+                SheetAction(
+                    label = "上移一段",
+                    icon = Icons.Default.KeyboardArrowUp,
+                    onClick = { state.activeBlockId?.let { viewModel.move(it, -1) } }
+                ),
+                SheetAction(
+                    label = "下移一段",
+                    icon = Icons.Default.KeyboardArrowDown,
+                    onClick = { state.activeBlockId?.let { viewModel.move(it, 1) } }
+                ),
+                SheetAction(
+                    label = "删除本段",
+                    icon = Icons.Default.Delete,
+                    destructive = true,
+                    onClick = { state.activeBlockId?.let { viewModel.remove(it) } }
+                )
+            ),
+            onDismiss = { blockMenuOpen = false }
+        )
     }
 }
 
@@ -277,8 +378,20 @@ private fun EditorHeader(
     saving: Boolean,
     dirty: Boolean,
     error: String?,
-    empty: Boolean
+    empty: Boolean,
+    onStartWriting: () -> Unit
 ) {
+    val animatedWordCount by animateIntAsState(
+        targetValue = wordCount.toInt(),
+        animationSpec = tween(420, easing = Motion.Standard),
+        label = "wordCount"
+    )
+    val saveLabel = when {
+        error != null -> error
+        saving -> "保存中…"
+        dirty -> "未保存"
+        else -> "已保存"
+    }
     Column(Modifier.padding(bottom = 10.dp)) {
         Text(
             chapterTitle.ifBlank { "未命名章节" },
@@ -287,28 +400,33 @@ private fun EditorHeader(
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                wordCount.toString() + " 字",
+                animatedWordCount.toString() + " 字",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.width(12.dp))
-            Text(
-                when {
-                    error != null -> error
-                    saving -> "保存中…"
-                    dirty -> "未保存"
-                    else -> "已保存"
-                },
-                style = MaterialTheme.typography.labelMedium,
-                color = if (error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Crossfade(
+                targetState = saveLabel,
+                animationSpec = tween(Motion.Fast),
+                label = "saveState"
+            ) { label ->
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
         if (empty) {
             Spacer(Modifier.height(20.dp))
             Text(
-                "点击正文开始写，回车分段。",
+                "点这里开始写，回车分段。",
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(onClick = onStartWriting)
+                    .padding(vertical = 6.dp)
             )
         }
     }
@@ -317,14 +435,25 @@ private fun EditorHeader(
 @Composable
 private fun InactiveBlock(block: Block, onActivate: (Int) -> Unit) {
     var layout by remember(block.id) { mutableStateOf<TextLayoutResult?>(null) }
+    val interaction = remember { MutableInteractionSource() }
     val text = block.text.ifBlank { " " }
     Text(
         text = text,
         onTextLayout = { layout = it },
         modifier = Modifier
             .fillMaxWidth()
+            .indication(interaction, ripple())
             .pointerInput(block.id) {
-                detectTapGestures { position ->
+                detectTapGestures(
+                    onPress = { offset ->
+                        val press = PressInteraction.Press(offset)
+                        interaction.emit(press)
+                        val released = tryAwaitRelease()
+                        interaction.emit(
+                            if (released) PressInteraction.Release(press) else PressInteraction.Cancel(press)
+                        )
+                    }
+                ) { position ->
                     onActivate(layout?.getOffsetForPosition(position) ?: 0)
                 }
             }
@@ -335,48 +464,102 @@ private fun InactiveBlock(block: Block, onActivate: (Int) -> Unit) {
     )
 }
 
+/**
+ * 键盘上方的浮动工具条（纯纯写作的快捷输入栏位置）。
+ * 贴住输入法上沿，五个等宽触控块，手指不用离开键盘区太远。
+ */
 @Composable
-private fun BottomEditorBar(
-    activeBlockId: String?,
+private fun EditorToolbar(
     undoAvailable: Boolean,
     redoAvailable: Boolean,
+    hasActiveBlock: Boolean,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
     onAdd: () -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-    onDelete: () -> Unit,
-    onHideKeyboard: () -> Unit,
-    hasActiveBlock: Boolean
+    onParagraph: () -> Unit,
+    onHideKeyboard: () -> Unit
 ) {
-    var menuOpen by remember { mutableStateOf(false) }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 3.dp,
+        shadowElevation = 8.dp,
+        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
+        modifier = Modifier.fillMaxWidth()
     ) {
-        TextButton(onClick = onUndo, enabled = undoAvailable) { Text("撤销") }
-        TextButton(onClick = onRedo, enabled = redoAvailable) { Text("重做") }
-        TextButton(onClick = onAdd, enabled = activeBlockId != null) { Text("＋段") }
-        Box {
-            TextButton(onClick = { menuOpen = true }, enabled = hasActiveBlock) { Text("段落") }
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                DropdownMenuItem(
-                    text = { Text("上移") },
-                    onClick = { menuOpen = false; onMoveUp() }
-                )
-                DropdownMenuItem(
-                    text = { Text("下移") },
-                    onClick = { menuOpen = false; onMoveDown() }
-                )
-                DropdownMenuItem(
-                    text = { Text("删除本段") },
-                    onClick = { menuOpen = false; onDelete() }
-                )
-            }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ToolbarAction(painterResource(R.drawable.ic_undo), "撤销", undoAvailable, onUndo, Modifier.weight(1f))
+            ToolbarAction(painterResource(R.drawable.ic_redo), "重做", redoAvailable, onRedo, Modifier.weight(1f))
+            ToolbarAction(Icons.Default.Add, "新段", hasActiveBlock, onAdd, Modifier.weight(1f))
+            ToolbarAction(Icons.Default.List, "段落", hasActiveBlock, onParagraph, Modifier.weight(1f))
+            ToolbarAction(Icons.Default.KeyboardArrowDown, "收起", true, onHideKeyboard, Modifier.weight(1f))
         }
-        TextButton(onClick = onHideKeyboard) { Text("收起") }
+    }
+}
+
+@Composable
+private fun ToolbarAction(
+    icon: ImageVector,
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    ToolbarActionContent(label, enabled, onClick, modifier) { tint ->
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+    }
+}
+
+@Composable
+private fun ToolbarAction(
+    icon: Painter,
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    ToolbarActionContent(label, enabled, onClick, modifier) { tint ->
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+    }
+}
+
+@Composable
+private fun ToolbarActionContent(
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier,
+    icon: @Composable (Color) -> Unit
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val alpha by animateFloatAsState(
+        targetValue = if (enabled) 1f else 0.3f,
+        animationSpec = tween(Motion.Fast),
+        label = "toolbarAction"
+    )
+    Column(
+        modifier = modifier
+            .alpha(alpha)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(
+                interactionSource = interaction,
+                indication = ripple(),
+                enabled = enabled,
+                onClick = onClick
+            )
+            .padding(vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        icon(MaterialTheme.colorScheme.onSurface)
+        Spacer(Modifier.height(2.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
