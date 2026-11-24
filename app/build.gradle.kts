@@ -19,23 +19,34 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    val projectDebugKeystore = rootProject.file("keystore/debug.keystore")
     signingConfigs {
-        create("projectDebug") {
-            storeFile = rootProject.file("keystore/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+        if (projectDebugKeystore.exists()) {
+            create("projectDebug") {
+                storeFile = projectDebugKeystore
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
         }
     }
 
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("projectDebug")
+            signingConfig = if (projectDebugKeystore.exists()) {
+                signingConfigs.getByName("projectDebug")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("projectDebug")
+            signingConfig = if (projectDebugKeystore.exists()) {
+                signingConfigs.getByName("projectDebug")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

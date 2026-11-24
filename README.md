@@ -30,7 +30,7 @@ $env:GRADLE_USER_HOME="E:\AIbendi\work\android-toolchain\gradle-user-home"
 .\gradlew.bat :app:assembleDebug
 ~~~
 
-项目带 Gradle wrapper（8.9）；也可以直接用工具链里的 Gradle。
+项目带 Gradle wrapper（8.9）；也可以直接用工具链里的 Gradle。debug 签名优先用本机 keystore/debug.keystore（不进 git）；新克隆没有该文件时回退到系统 debug keystore。
 
 ## 结构
 
