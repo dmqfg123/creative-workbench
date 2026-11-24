@@ -52,6 +52,27 @@ class DirectoryViewModel(
         }
     }
 
+    fun moveChapter(chapterId: String, delta: Int) {
+        viewModelScope.launch {
+            try {
+                repository.moveChapter(chapterId, delta)
+            } catch (error: Exception) {
+                _messages.emit("移动失败：" + (error.message ?: "存储错误"))
+            }
+        }
+    }
+
+    fun updateNote(chapterId: String, note: String) {
+        viewModelScope.launch {
+            try {
+                repository.updateChapterNote(chapterId, note)
+                _messages.emit("备注已保存")
+            } catch (error: Exception) {
+                _messages.emit("备注保存失败：" + (error.message ?: "存储错误"))
+            }
+        }
+    }
+
     fun renameChapter(chapterId: String, title: String) {
         viewModelScope.launch {
             try {

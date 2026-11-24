@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.asStateFlow
 
 enum class ThemeMode { System, Light, Dark }
 enum class FontSizePreset { Small, Standard, Large }
+enum class LibrarySort { Recent, Created, Title, Words }
 
 data class AppSettings(
     val theme: ThemeMode = ThemeMode.System,
@@ -16,7 +17,8 @@ data class AppSettings(
     val allowCleartextHttp: Boolean = false,
     val fpsOverlay: Boolean = false,
     val lastBackupAt: Long? = null,
-    val lastExportAt: Long? = null
+    val lastExportAt: Long? = null,
+    val librarySort: LibrarySort = LibrarySort.Recent
 )
 
 class SettingsRepository(context: Context) {
@@ -34,7 +36,9 @@ class SettingsRepository(context: Context) {
         allowCleartextHttp = prefs.getBoolean("allow_cleartext_http", false),
         fpsOverlay = prefs.getBoolean("fps_overlay", false),
         lastBackupAt = prefs.getLong("last_backup_at", 0L).takeIf { it > 0L },
-        lastExportAt = prefs.getLong("last_export_at", 0L).takeIf { it > 0L }
+        lastExportAt = prefs.getLong("last_export_at", 0L).takeIf { it > 0L },
+        librarySort = runCatching { LibrarySort.valueOf(prefs.getString("library_sort", LibrarySort.Recent.name)!!) }
+            .getOrDefault(LibrarySort.Recent)
     )
 
     fun setTheme(mode: ThemeMode) {
@@ -45,6 +49,11 @@ class SettingsRepository(context: Context) {
     fun setFontSize(preset: FontSizePreset) {
         prefs.edit().putString("font_size", preset.name).apply()
         _settings.value = _settings.value.copy(fontSize = preset)
+    }
+
+    fun setLibrarySort(sort: LibrarySort) {
+        prefs.edit().putString("library_sort", sort.name).apply()
+        _settings.value = _settings.value.copy(librarySort = sort)
     }
 
     fun setNotesEnabled(enabled: Boolean) {

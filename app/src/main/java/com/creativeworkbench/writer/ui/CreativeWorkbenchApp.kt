@@ -30,10 +30,15 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.creativeworkbench.writer.ui.screens.AiHistoryScreen
+import com.creativeworkbench.writer.ui.screens.AiSettingsScreen
+import com.creativeworkbench.writer.ui.screens.DataSettingsScreen
 import com.creativeworkbench.writer.ui.screens.DirectoryScreen
+import com.creativeworkbench.writer.ui.screens.ModulesScreen
 import com.creativeworkbench.writer.ui.screens.EditorScreen
 import com.creativeworkbench.writer.ui.screens.LibraryScreen
 import com.creativeworkbench.writer.ui.screens.MoreScreen
+import com.creativeworkbench.writer.ui.screens.NoteDetailScreen
 import com.creativeworkbench.writer.ui.screens.NotesScreen
 import com.creativeworkbench.writer.ui.theme.CreativeWorkbenchTheme
 import com.creativeworkbench.writer.ui.theme.Motion
@@ -103,18 +108,66 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                 composable("library") {
                     LibraryScreen(
                         works = viewModel.works.collectAsStateWithLifecycle().value,
+                        sort = settings.librarySort,
                         onCreateWork = viewModel::createWork,
                         onOpenWork = viewModel::openWork,
                         onOpenDirectory = { workId -> navController.navigate("directory/" + workId) },
-                        onDeleteWork = viewModel::deleteWork
+                        onRenameWork = viewModel::renameWork,
+                        onDeleteWork = viewModel::deleteWork,
+                        onSaveQuickNote = { kind, content, tag ->
+                            viewModel.saveQuickNote(kind, null, content, appState.currentWorkId)
+                        },
+                        onOpenNotes = { filter ->
+                            viewModel.requestNotesFilter(filter)
+                            navController.navigateSingleTop("notes")
+                        },
+                        onOpenLibrary = { navController.navigateSingleTop("library") },
+                        onOpenSettings = { navController.navigateSingleTop("more") },
+                        onSortChange = viewModel::setLibrarySort
                     )
                 }
                 composable("notes") {
-                    NotesScreen()
+                    NotesScreen(
+                        notes = viewModel.notes.collectAsStateWithLifecycle().value,
+                        works = viewModel.works.collectAsStateWithLifecycle().value,
+                        currentWorkId = viewModel.appState.collectAsStateWithLifecycle().value.currentWorkId,
+                        pendingFilter = viewModel.pendingNotesFilter.collectAsStateWithLifecycle().value,
+                        onFilterConsumed = viewModel::consumeNotesFilter,
+                        onOpenNote = { noteId -> navController.navigate("note/" + noteId + "/" + "") },
+                        onNewNote = { kind -> navController.navigate("note/new/" + kind) },
+                        onOpenLibrary = { navController.navigateSingleTop("library") }
+                    )
+                }
+                composable("note/{noteId}/{kind}") { entry ->
+                    val noteId = entry.arguments?.getString("noteId").orEmpty()
+                    val kind = entry.arguments?.getString("kind").orEmpty().ifBlank { "idea" }
+                    NoteDetailScreen(
+                        noteId = noteId,
+                        workId = viewModel.appState.collectAsStateWithLifecycle().value.currentWorkId,
+                        kind = kind,
+                        onBack = { navController.popBackStack() }
+                    )
                 }
                 composable("more") {
-                    MoreScreen(viewModel = viewModel, settings = settings)
+                    MoreScreen(
+                        viewModel = viewModel,
+                        settings = settings,
+                        onOpenAi = { navController.navigate("more/ai") },
+                        onOpenAiHistory = { navController.navigate("more/ai-history") },
+                        onOpenModules = { navController.navigate("more/modules") },
+                        onOpenData = { navController.navigate("more/data") }
+                    )
                 }
+                composable("more/ai") { AiSettingsScreen(onBack = { navController.popBackStack() }) }
+                composable("more/ai-history") { AiHistoryScreen(onBack = { navController.popBackStack() }) }
+                composable("more/modules") {
+                    ModulesScreen(
+                        notesEnabled = settings.notesEnabled,
+                        onToggleNotes = viewModel::setNotesEnabled,
+                        onBack = { navController.popBackStack() }
+                    )
+                }
+                composable("more/data") { DataSettingsScreen(onBack = { navController.popBackStack() }) }
                 composable(
                     "directory/{workId}",
                     // 进入下一层：从右侧滑入，旧页面轻微左移，符合"推开一层"的直觉
@@ -178,6 +231,8 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                     EditorScreen(
                         workId = workId,
                         chapterId = chapterId,
+                        notes = viewModel.notes.collectAsStateWithLifecycle().value,
+                        notesEnabled = settings.notesEnabled,
                         onBack = { navController.popBackStack() },
                         onOpenDirectory = {
                             // 从编辑器去目录：把编辑器从返回栈里换掉，避免同一章在栈里留两份

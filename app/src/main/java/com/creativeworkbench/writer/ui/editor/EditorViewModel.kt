@@ -25,6 +25,7 @@ import java.util.UUID
 data class EditorUiState(
     val workTitle: String = "",
     val chapterTitle: String = "",
+    val chapterNote: String = "",
     val blocks: List<Block> = emptyList(),
     val revision: Long = 0L,
     val activeBlockId: String? = null,
@@ -75,6 +76,7 @@ class EditorViewModel(
                     _state.value = EditorUiState(
                         workTitle = repository.work(opened.chapter.workId)?.title.orEmpty(),
                         chapterTitle = opened.chapter.title,
+                        chapterNote = opened.chapter.note,
                         blocks = opened.content.blocks,
                         revision = opened.chapter.revision,
                         wordCount = total,
@@ -123,6 +125,119 @@ class EditorViewModel(
             undoStack.clear()
             redoStack.clear()
         }
+    }
+
+    /** 章节备注：不进正文，不计字数。 */
+    fun setChapterNote(note: String) {
+        _state.update { it.copy(chapterNote = note) }
+    }
+
+    fun persistChapterNote() {
+        val note = _state.value.chapterNote
+        viewModelScope.launch {
+            runCatching { repository.updateChapterNote(chapterId, note) }
+        }
+    }
+
+    /**
+     * 插入笔记：按空行拆段，接在当前段之后；整批算一步撤销。
+     */
+    fun insertNote(content: String) {
+        val paragraphs = content.split(Regex("\\n\\s*\\n"))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        if (paragraphs.isEmpty()) return
+        val before = _state.value.blocks
+        val anchor = _state.value.activeBlockId
+            ?.let { id -> before.indexOfFirst { it.id == id } }
+            ?.takeIf { it >= 0 } ?: (before.size - 1)
+        val inserted = paragraphs.map { Block(UUID.randomUUID().toString(), it) }
+        val after = before.toMutableList().apply { addAll(anchor + 1, inserted) }
+        undoStack.addLast(UndoEntry(before, after))
+        redoStack.clear()
+        _state.update {
+            it.copy(
+                blocks = after,
+                wordCount = refreshWordCounts(after),
+                dirty = true,
+                activeBlockId = null,
+                undoAvailable = true,
+                redoAvailable = false,
+                error = null
+            )
+        }
+        editVersion++
+        markDirty(after)
+    }
+
+    /** AI 续写写入：按空行拆段，接在当前段之后；整批一步撤销。返回插入的 block id。 */
+    fun applyAiContinue(text: String): List<String> {
+        val snapshotBlocks = _state.value.blocks
+        viewModelScope.launch { runCatching { repository.saveSnapshot(chapterId, snapshotBlocks) } }
+        val paragraphs = text.split(Regex("\\n\\s*\\n"))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        if (paragraphs.isEmpty()) return emptyList()
+        val before = _state.value.blocks
+        val anchor = _state.value.activeBlockId
+            ?.let { id -> before.indexOfFirst { it.id == id } }
+            ?.takeIf { it >= 0 } ?: (before.size - 1)
+        val inserted = paragraphs.map { Block(UUID.randomUUID().toString(), it) }
+        val after = before.toMutableList().apply { addAll(anchor + 1, inserted) }
+        undoStack.addLast(UndoEntry(before, after))
+        redoStack.clear()
+        _state.update {
+            it.copy(
+                blocks = after,
+                wordCount = refreshWordCounts(after),
+                dirty = true,
+                activeBlockId = null,
+                undoAvailable = true,
+                redoAvailable = false,
+                error = null
+            )
+        }
+        editVersion++
+        markDirty(after)
+        return inserted.map { it.id }
+    }
+
+    /** AI 改写写入：只替换当前段内的选区；一步撤销。 */
+    fun applyAiRewrite(blockId: String, start: Int, end: Int, replacement: String): Boolean {
+        val before = _state.value.blocks
+        viewModelScope.launch { runCatching { repository.saveSnapshot(chapterId, before) } }
+        val index = before.indexOfFirst { it.id == blockId }
+        if (index < 0) return false
+        val text = before[index].text
+        if (start < 0 || end > text.length || start > end) return false
+        val newText = text.replaceRange(start, end, replacement)
+        val after = before.toMutableList().apply { this[index] = before[index].copy(text = newText) }
+        undoStack.addLast(UndoEntry(before, after))
+        redoStack.clear()
+        _state.update {
+            it.copy(
+                blocks = after,
+                wordCount = refreshWordCounts(after),
+                dirty = true,
+                undoAvailable = true,
+                redoAvailable = false,
+                activeBlockId = blockId,
+                cursorOffset = (start + replacement.length).coerceAtMost(newText.length),
+                error = null
+            )
+        }
+        editVersion++
+        markDirty(after)
+        return true
+    }
+
+    fun contentHash(): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        _state.value.blocks.forEach { block ->
+            digest.update(block.id.toByteArray())
+            digest.update(block.text.toByteArray())
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }.take(32)
     }
 
     fun activate(blockId: String, cursorOffset: Int = 0) {

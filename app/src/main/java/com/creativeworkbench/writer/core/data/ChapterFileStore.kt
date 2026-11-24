@@ -37,7 +37,28 @@ class ChapterFileStore(context: Context) {
         chaptersDir.mkdirs()
     }
 
+    private val snapshotsDir = File(root, "snapshots")
+
     fun contentFile(chapterId: String): File = File(chaptersDir, chapterId + ".json")
+
+    /** 自动快照：写入前兜底，v1 不做恢复 UI。 */
+    fun writeSnapshot(chapterId: String, createdAtMs: Long, seq: Int, content: ChapterContent): File {
+        val dir = File(snapshotsDir, chapterId).apply { mkdirs() }
+        val file = File(dir, createdAtMs.toString() + "-" + seq + ".json")
+        val tmp = File(dir, file.name + ".tmp")
+        tmp.writeText(json.encodeToString(content))
+        if (file.exists()) file.delete()
+        tmp.renameTo(file)
+        return file
+    }
+
+    fun deleteSnapshot(path: String) {
+        runCatching { File(path).delete() }
+    }
+
+    fun deleteSnapshots(chapterId: String) {
+        runCatching { File(snapshotsDir, chapterId).deleteRecursively() }
+    }
     fun journalFile(chapterId: String): File = File(chaptersDir, chapterId + ".journal")
     fun backupFile(chapterId: String): File = File(chaptersDir, chapterId + ".json.bak")
 

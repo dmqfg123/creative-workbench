@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.creativeworkbench.writer.WorkbenchApp
+import com.creativeworkbench.writer.core.data.NoteEntity
+import com.creativeworkbench.writer.core.data.NoteKind
 import com.creativeworkbench.writer.core.data.OpenedChapter
 import com.creativeworkbench.writer.core.data.SaveResult
 import com.creativeworkbench.writer.core.data.UpdateSource
@@ -37,8 +39,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val chapterRepository = container.chapters
     private val settingsRepository = container.settings
 
+    private val noteRepository = container.notes
+
     val works: StateFlow<List<WorkEntity>> = chapterRepository.observeWorks()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val notes: StateFlow<List<NoteEntity>> = noteRepository.observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** 书架「速记 → 查看全部」要用：让笔记页打开时预选筛选。 */
+    private val _pendingNotesFilter = MutableStateFlow<String?>(null)
+    val pendingNotesFilter: StateFlow<String?> = _pendingNotesFilter.asStateFlow()
 
     val settings = settingsRepository.settings
 
@@ -92,10 +103,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun requestNotesFilter(filter: String?) {
+        _pendingNotesFilter.value = filter
+    }
+
+    fun consumeNotesFilter(): String? {
+        val value = _pendingNotesFilter.value
+        _pendingNotesFilter.value = null
+        return value
+    }
+
     fun openWork(workId: String) {
         viewModelScope.launch {
             try {
-                val chapter = chapterRepository.ensureFirstChapter(workId)
+                // PRD：点卡片进「最近编辑的篇章」。章节 updatedAt 每次保存都会更新。
+                val chapters = chapterRepository.chapters(workId)
+                val recent = chapters.maxByOrNull { it.updatedAt }
+                val chapter = recent ?: chapterRepository.ensureFirstChapter(workId)
                 if (chapter == null) {
                     _events.emit(AppEvent.Toast("作品不存在"))
                     return@launch
@@ -111,6 +135,45 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setCurrentChapter(workId: String, chapterId: String) {
         _appState.value = _appState.value.copy(currentWorkId = workId, currentChapterId = chapterId)
+    }
+
+    fun renameWork(workId: String, title: String) {
+        viewModelScope.launch {
+            try {
+                chapterRepository.renameWork(workId, title.trim())
+            } catch (error: Exception) {
+                _events.emit(AppEvent.Toast("改名失败：" + (error.message ?: "存储错误")))
+            }
+        }
+    }
+
+    fun setLibrarySort(sort: com.creativeworkbench.writer.core.settings.LibrarySort) {
+        settingsRepository.setLibrarySort(sort)
+    }
+
+    /** 速记面板保存：备忘落 memo，灵感类落 idea/fragment/dialogue。 */
+    fun saveQuickNote(kind: String, title: String?, content: String, workId: String?) {
+        viewModelScope.launch {
+            try {
+                val now = System.currentTimeMillis()
+                val text = content.trim()
+                if (text.isEmpty()) return@launch
+                val note = NoteEntity(
+                    id = java.util.UUID.randomUUID().toString(),
+                    workId = workId,
+                    kind = kind,
+                    title = title?.trim()?.takeIf { it.isNotEmpty() }
+                        ?: text.lineSequence().first().take(20),
+                    content = text,
+                    createdAtMs = now,
+                    updatedAtMs = now
+                )
+                noteRepository.upsert(note)
+                _events.emit(AppEvent.Toast("已保存到笔记"))
+            } catch (error: Exception) {
+                _events.emit(AppEvent.Toast("保存失败：" + (error.message ?: "存储错误")))
+            }
+        }
     }
 
     fun deleteWork(workId: String) {

@@ -1,8 +1,9 @@
 package com.creativeworkbench.writer.ui.screens
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,95 +13,343 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.ui.res.painterResource
+import com.creativeworkbench.writer.R
+import kotlinx.coroutines.launch
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.creativeworkbench.writer.core.data.NoteKind
 import com.creativeworkbench.writer.core.data.WorkEntity
+import com.creativeworkbench.writer.core.settings.LibrarySort
 import com.creativeworkbench.writer.ui.components.ActionSheet
 import com.creativeworkbench.writer.ui.components.SheetAction
 import com.creativeworkbench.writer.ui.components.pressScale
+import com.creativeworkbench.writer.ui.design.EmptyState
+import com.creativeworkbench.writer.ui.design.GhostButton
+import com.creativeworkbench.writer.ui.design.IconAction
+import com.creativeworkbench.writer.ui.design.PageHeader
+import com.creativeworkbench.writer.ui.design.PillButton
+import com.creativeworkbench.writer.ui.design.SearchField
+import com.creativeworkbench.writer.ui.design.SectionLabel
+import com.creativeworkbench.writer.ui.design.Tag
+import com.creativeworkbench.writer.ui.design.WbCard
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 private val coverColors = listOf(
-    Color(0xFF70816C),
-    Color(0xFF9E7164),
-    Color(0xFF7D728E),
-    Color(0xFFB08A55),
-    Color(0xFF647D86)
+    Color(0xFF8E7B63),
+    Color(0xFF9C6B58),
+    Color(0xFF7C7F6B),
+    Color(0xFFA38A5F),
+    Color(0xFF6F7B84),
+    Color(0xFF8A6B7A)
 )
 
 /**
- * 书架：M3 常见布局——大标题在列表里随滚动走，新建入口固定在右下角悬浮按钮，
- * 单手拿 6.6 寸手机时拇指够得到（番茄作家助手把新建放在右上角，需要够屏幕顶）。
+ * 书架：作品是唯一入口。个人工具，不做运营位、不做数据看板。
+ * 速记固定在右下；新建作品是列表末尾的一张卡，不占悬浮位。
  */
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(
     works: List<WorkEntity>,
+    sort: LibrarySort,
     onCreateWork: (String) -> Unit,
     onOpenWork: (String) -> Unit,
     onOpenDirectory: (String) -> Unit,
-    onDeleteWork: (String) -> Unit
+    onRenameWork: (String, String) -> Unit,
+    onDeleteWork: (String) -> Unit,
+    onSaveQuickNote: (kind: String, content: String, tag: String?) -> Unit,
+    onOpenNotes: (String?) -> Unit,
+    onOpenLibrary: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onSortChange: (LibrarySort) -> Unit
 ) {
+    var searching by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    var showSort by remember { mutableStateOf(false) }
     var showNewWork by remember { mutableStateOf(false) }
-    var menuWork by remember { mutableStateOf<WorkEntity?>(null) }
+    var renameTarget by remember { mutableStateOf<WorkEntity?>(null) }
     var deleteTarget by remember { mutableStateOf<WorkEntity?>(null) }
-    val recent = works.firstOrNull()
+    var menuWork by remember { mutableStateOf<WorkEntity?>(null) }
+    var showQuickNote by remember { mutableStateOf(false) }
+    var pendingDeleteId by remember { mutableStateOf<String?>(null) }
+    val snackbar = remember { SnackbarHostState() }
+
+    // 删除 5 秒内可撤销：先隐藏，5 秒后才真正删。
+    LaunchedEffect(pendingDeleteId) {
+        val id = pendingDeleteId ?: return@LaunchedEffect
+        val result = snackbar.showSnackbar(
+            message = "已删除，5 秒内可撤销",
+            actionLabel = "撤销",
+            duration = androidx.compose.material3.SnackbarDuration.Long
+        )
+        if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+            pendingDeleteId = null
+        } else {
+            onDeleteWork(id)
+            pendingDeleteId = null
+        }
+    }
+
+    val filtered = works
+        .filter { pendingDeleteId != it.id }
+        .filter { query.isBlank() || it.title.contains(query.trim(), ignoreCase = true) }
+    val sorted = when (sort) {
+        LibrarySort.Recent -> filtered.sortedByDescending { it.lastOpenedAt }
+        LibrarySort.Created -> filtered.sortedByDescending { it.createdAt }
+        LibrarySort.Title -> filtered.sortedBy { it.title }
+        LibrarySort.Words -> filtered.sortedByDescending { it.wordCount }
+    }
+    val recent = works.filter { pendingDeleteId != it.id }.maxByOrNull { it.lastOpenedAt }
+
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 0.dp, bottom = 120.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                PageHeader(
+                    title = "书架",
+                    subtitle = works.size.toString() + " 部作品 · 只存本机"
+                ) {
+                    IconAction(
+                        icon = Icons.Default.Search,
+                        contentDescription = "搜索作品",
+                        tint = if (searching) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        onClick = {
+                            searching = !searching
+                            if (!searching) query = ""
+                        }
+                    )
+                    androidx.compose.material3.IconButton(
+                        onClick = { showSort = true },
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Icon(
+                            painterResource(R.drawable.ic_sort),
+                            contentDescription = "排序",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+            }
+
+            if (searching) {
+                item {
+                    SearchField(
+                        value = query,
+                        onValueChange = { query = it },
+                        placeholder = "搜索书名",
+                        onClose = {
+                            searching = false
+                            query = ""
+                        }
+                    )
+                }
+            }
+
+            if (works.isEmpty()) {
+                item {
+                    WbCard(contentPadding = PaddingValues(0.dp)) {
+                        EmptyState(
+                            title = "还没有作品",
+                            message = "所有数据只存本机，AI 可选。先建一部作品，写第一章。",
+                            actionLabel = "新建第一部作品",
+                            onAction = { showNewWork = true }
+                        )
+                        Row(
+                            Modifier.fillMaxWidth().padding(bottom = 20.dp),
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            TextButton(onClick = onOpenSettings) { Text("去设置 AI") }
+                        }
+                    }
+                }
+            } else {
+                // 只有一部作品时，列表本身就能继续写；再放一张大卡是重复信息。
+                if (recent != null && query.isBlank() && works.size >= 2) {
+                    item(key = "continue") {
+                        ContinueCard(work = recent, onClick = { onOpenWork(recent.id) })
+                    }
+                }
+                item(key = "label") {
+                    SectionLabel(
+                        if (query.isBlank()) "全部作品" else "搜索结果 · " + sorted.size
+                    )
+                }
+                items(sorted, key = { it.id }) { work ->
+                    WorkRow(
+                        work = work,
+                        onClick = { onOpenWork(work.id) },
+                        onMenu = { menuWork = work }
+                    )
+                }
+                if (query.isBlank()) {
+                    item(key = "new") {
+                        NewWorkCard(onClick = { showNewWork = true })
+                    }
+                } else if (sorted.isEmpty()) {
+                    item(key = "noresult") {
+                        EmptyState(
+                            title = "没找到「" + query.trim() + "」",
+                            message = "换个关键词，或者清空搜索。",
+                            actionLabel = "清空搜索",
+                            onAction = { query = "" }
+                        )
+                    }
+                }
+            }
+        }
+
+        if (works.isNotEmpty()) {
+            ExtendedFloatingActionButton(
+                onClick = { showQuickNote = true },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 24.dp, bottom = 20.dp),
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                icon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                text = { Text("速记", fontWeight = FontWeight.Medium) }
+            )
+        }
+
+        SnackbarHost(
+            hostState = snackbar,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp)
+        )
+    }
+
+    if (showSort) {
+        ActionSheet(
+            title = "排序",
+            actions = LibrarySort.entries.map { option ->
+                SheetAction(
+                    label = sortLabel(option),
+                    icon = if (option == sort) Icons.Default.Check else null,
+                    onClick = { onSortChange(option) }
+                )
+            },
+            onDismiss = { showSort = false }
+        )
+    }
 
     if (showNewWork) {
-        NewWorkDialog(
+        NameDialog(
+            title = "新作品",
+            label = "书名",
+            hint = "只填书名；创建后自动建第一章。",
+            initial = "",
+            confirmLabel = "创建",
             onDismiss = { showNewWork = false },
-            onCreate = {
+            onConfirm = {
                 onCreateWork(it)
                 showNewWork = false
             }
         )
     }
 
+    renameTarget?.let { work ->
+        NameDialog(
+            title = "修改书名",
+            label = "书名",
+            hint = null,
+            initial = work.title,
+            confirmLabel = "保存",
+            onDismiss = { renameTarget = null },
+            onConfirm = {
+                onRenameWork(work.id, it)
+                renameTarget = null
+            }
+        )
+    }
+
+    menuWork?.let { work ->
+        ActionSheet(
+            title = work.title,
+            subtitle = formatWords(work.wordCount) + " · " + work.chapterCount + " 章",
+            actions = listOf(
+                SheetAction(
+                    label = "作品目录",
+                    icon = Icons.Default.List,
+                    onClick = { onOpenDirectory(work.id) }
+                ),
+                SheetAction(
+                    label = "修改书名",
+                    icon = Icons.Default.Edit,
+                    onClick = { renameTarget = work }
+                ),
+                SheetAction(
+                    label = "删除作品",
+                    icon = Icons.Default.Delete,
+                    destructive = true,
+                    description = "5 秒内可撤销；删除前建议先导出备份",
+                    onClick = {
+                        deleteTarget = work
+                    }
+                )
+            ),
+            onDismiss = { menuWork = null }
+        )
+    }
+
     deleteTarget?.let { work ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
-            title = { Text("删除作品？") },
-            text = { Text("将删除《" + work.title + "》的全部章节；建议先导出备份。") },
+            title = { Text("删除《" + work.title + "》？") },
+            text = { Text("会删除这部作品的 " + work.chapterCount + " 章正文与日志。5 秒内可以撤销。") },
             confirmButton = {
                 TextButton(
                     onClick = {
                         deleteTarget = null
-                        onDeleteWork(work.id)
+                        pendingDeleteId = work.id
                     },
                     colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
                         contentColor = MaterialTheme.colorScheme.error
@@ -113,281 +362,315 @@ fun LibraryScreen(
         )
     }
 
-    Box(Modifier.fillMaxSize()) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 112.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            item {
-                LibraryHeader(count = works.size)
+    if (showQuickNote) {
+        QuickNoteSheet(
+            onDismiss = { showQuickNote = false },
+            onSave = { kind, content, tag ->
+                onSaveQuickNote(kind, content, tag)
+                showQuickNote = false
+            },
+            onViewAll = {
+                showQuickNote = false
+                onOpenNotes("quick")
             }
-            if (recent != null) {
-                item {
-                    ContinueCard(
-                        work = recent,
-                        onClick = { onOpenWork(recent.id) },
-                        modifier = Modifier.animateItem()
-                    )
-                }
-            }
-            if (works.isEmpty()) {
-                item {
-                    EmptyLibrary(onCreate = { showNewWork = true })
-                }
-            } else {
-                item {
-                    Text(
-                        "全部作品",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 4.dp, top = 6.dp)
-                    )
-                }
-                items(works, key = { it.id }) { work ->
-                    WorkCard(
-                        work = work,
-                        onClick = { onOpenWork(work.id) },
-                        onMenu = { menuWork = work },
-                        modifier = Modifier.animateItem()
-                    )
-                }
-            }
-        }
-
-        // 空态里已经有主按钮，再放 FAB 就是两个入口抢同一件事，所以空态不显示 FAB。
-        if (works.isNotEmpty()) {
-            ExtendedFloatingActionButton(
-                onClick = { showNewWork = true },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 20.dp),
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-                icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                text = { Text("新作品", fontWeight = FontWeight.Medium) }
-            )
-        }
-    }
-
-    menuWork?.let { work ->
-        ActionSheet(
-            title = work.title,
-            subtitle = formatWords(work.wordCount) + " · " + work.chapterCount + " 章",
-            actions = listOf(
-                SheetAction(
-                    label = "查看目录",
-                    icon = Icons.Default.List,
-                    onClick = { onOpenDirectory(work.id) }
-                ),
-                SheetAction(
-                    label = "删除作品",
-                    icon = Icons.Default.Delete,
-                    destructive = true,
-                    onClick = { deleteTarget = work }
-                )
-            ),
-            onDismiss = { menuWork = null }
         )
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun LibraryHeader(count: Int) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)) {
-        Column(Modifier.weight(1f)) {
-            Text("书架", style = MaterialTheme.typography.titleLarge)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                count.toString() + " 部作品 · 只存本机",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
-private fun ContinueCard(work: WorkEntity, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val interaction = remember { MutableInteractionSource() }
-    Card(
-        onClick = onClick,
-        interactionSource = interaction,
-        modifier = modifier.fillMaxWidth().pressScale(interaction, 0.98f),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-    ) {
-        Column(Modifier.padding(20.dp)) {
-            Text(
-                "继续创作",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
-            )
-            Spacer(Modifier.height(10.dp))
-            Text(
-                work.title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                work.chapterCount.toString() + " 章 · " + formatWords(work.wordCount) + " · " + formatTime(work.lastOpenedAt),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
-            )
-            Spacer(Modifier.height(16.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "接着写",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-                Spacer(Modifier.width(2.dp))
-                Icon(
-                    Icons.Default.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun WorkCard(
-    work: WorkEntity,
-    onClick: () -> Unit,
-    onMenu: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val interaction = remember { MutableInteractionSource() }
-    Card(
-        onClick = onClick,
-        interactionSource = interaction,
-        modifier = modifier.fillMaxWidth().pressScale(interaction, 0.985f),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+private fun WorkRow(work: WorkEntity, onClick: () -> Unit, onMenu: () -> Unit) {
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .pressScale(interaction, 0.985f)
+            .combinedClickable(
+                interactionSource = interaction,
+                indication = androidx.compose.material3.ripple(),
+                onClick = onClick,
+                onLongClick = onMenu
+            ),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 14.dp, top = 14.dp, bottom = 14.dp),
+            modifier = Modifier.padding(start = 12.dp, top = 12.dp, bottom = 12.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(width = 50.dp, height = 66.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(coverBrush(work.id)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = work.title.take(1),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color(0xFFFFFAF3)
-                )
-            }
+            Cover(work = work, width = 44.dp, height = 58.dp)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    text = work.title,
+                    work.title,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    formatWords(work.wordCount) + " · " + work.chapterCount + " 章 · " + formatTime(work.lastOpenedAt),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
+                )
+            }
+            IconAction(
+                icon = Icons.Default.MoreVert,
+                contentDescription = "作品操作",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                onClick = onMenu
+            )
+        }
+    }
+}
+
+@Composable
+private fun ContinueCard(work: WorkEntity, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.primaryContainer,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.18f))
+    ) {
+        Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+            Cover(work = work, width = 52.dp, height = 70.dp)
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "继续创作",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = formatWords(work.wordCount) + " · " + work.chapterCount + " 章",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    work.title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(4.dp))
                 Text(
-                    text = formatTime(work.lastOpenedAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    formatWords(work.wordCount) + " · " + work.chapterCount + " 章 · " + formatTime(work.lastOpenedAt),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                 )
-            }
-            IconButton(onClick = onMenu, modifier = Modifier.size(48.dp)) {
-                Icon(
-                    Icons.Default.MoreVert,
-                    contentDescription = "更多",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Spacer(Modifier.height(14.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "接着写",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Icon(
+                        Icons.Default.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun EmptyLibrary(onCreate: () -> Unit) {
-    Card(
+private fun NewWorkCard(onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        shape = MaterialTheme.shapes.large,
+        color = Color.Transparent,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
     ) {
-        Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Icon(
-                Icons.Default.Edit,
+                Icons.Default.Add,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(20.dp)
             )
-            Spacer(Modifier.height(14.dp))
-            Text("还没有作品", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.width(8.dp))
             Text(
-                "写点什么吧。所有数据只存本机，AI 可选。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                "新作品",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary
             )
-            Spacer(Modifier.height(18.dp))
-            Button(onClick = onCreate) { Text("新建第一部作品") }
         }
     }
 }
 
 @Composable
-private fun NewWorkDialog(onDismiss: () -> Unit, onCreate: (String) -> Unit) {
-    var title by remember { mutableStateOf("") }
+private fun Cover(work: WorkEntity, width: androidx.compose.ui.unit.Dp, height: androidx.compose.ui.unit.Dp) {
+    val color = coverColors[(work.id.hashCode() and Int.MAX_VALUE) % coverColors.size]
+    Box(
+        modifier = Modifier
+            .size(width = width, height = height)
+            .background(
+                Brush.verticalGradient(listOf(color, color.copy(alpha = 0.82f))),
+                RoundedCornerShape(10.dp)
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            work.title.take(1),
+            style = MaterialTheme.typography.titleLarge,
+            color = Color(0xFFFFF8EC)
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun QuickNoteSheet(
+    onDismiss: () -> Unit,
+    onSave: (kind: String, content: String, tag: String?) -> Unit,
+    onViewAll: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var tab by remember { mutableStateOf(0) }
+    var text by remember { mutableStateOf("") }
+    var kind by remember { mutableStateOf(NoteKind.IDEA) }
+    var tag by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = 24.dp, vertical = 4.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("速记", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                TextButton(onClick = onViewAll) { Text("查看全部") }
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Tag("备忘", active = tab == 0, onClick = { tab = 0 })
+                Tag("灵感", active = tab == 1, onClick = { tab = 1 })
+            }
+            Spacer(Modifier.height(14.dp))
+            if (tab == 1) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Tag("灵感", active = kind == NoteKind.IDEA, onClick = { kind = NoteKind.IDEA })
+                    Tag("片段", active = kind == NoteKind.FRAGMENT, onClick = { kind = NoteKind.FRAGMENT })
+                    Tag("对白", active = kind == NoteKind.DIALOGUE, onClick = { kind = NoteKind.DIALOGUE })
+                    Tag("场景", active = tag == "场景", onClick = {
+                        kind = NoteKind.IDEA
+                        tag = if (tag == "场景") null else "场景"
+                    })
+                    Tag("资料", active = tag == "资料", onClick = {
+                        kind = NoteKind.IDEA
+                        tag = if (tag == "资料") null else "资料"
+                    })
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+            ) {
+                Box(Modifier.fillMaxWidth().height(150.dp).padding(14.dp)) {
+                    if (text.isEmpty()) {
+                        Text(
+                            if (tab == 0) "记一笔，保存为备忘" else "抓住这个念头，保存为素材",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    BasicTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                PillButton(
+                    text = "保存",
+                    enabled = text.isNotBlank(),
+                    onClick = {
+                        val saveKind = if (tab == 0) NoteKind.MEMO else kind
+                        onSave(saveKind, text, tag)
+                        scope.launch { sheetState.hide() }
+                    }
+                )
+            }
+            Spacer(Modifier.height(20.dp))
+        }
+    }
+}
+
+@Composable
+private fun NameDialog(
+    title: String,
+    label: String,
+    hint: String?,
+    initial: String,
+    confirmLabel: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var value by remember { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("新作品") },
+        title = { Text(title) },
         text = {
             Column {
-                Text(
-                    "先起个书名，之后可以在目录里新建章节。",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("书名") },
+                if (hint != null) {
+                    Text(
+                        hint,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(10.dp))
+                }
+                androidx.compose.material3.OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it },
+                    label = { Text(label) },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.small
                 )
             }
         },
         confirmButton = {
-            TextButton(
-                enabled = title.isNotBlank(),
-                onClick = { onCreate(title.trim()) }
-            ) { Text("创建") }
+            TextButton(enabled = value.isNotBlank(), onClick = { onConfirm(value.trim()) }) {
+                Text(confirmLabel)
+            }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("取消") }
-        }
+        },
+        shape = MaterialTheme.shapes.large
     )
 }
 
-private fun coverBrush(id: String) = Brush.linearGradient(
-    listOf(
-        coverColors[(id.hashCode() and Int.MAX_VALUE) % coverColors.size],
-        coverColors[(id.hashCode() and Int.MAX_VALUE) % coverColors.size].copy(alpha = 0.78f)
-    )
-)
+private fun sortLabel(sort: LibrarySort): String = when (sort) {
+    LibrarySort.Recent -> "最近编辑"
+    LibrarySort.Created -> "创建时间"
+    LibrarySort.Title -> "书名"
+    LibrarySort.Words -> "字数"
+}
 
 private fun formatWords(count: Long): String =
     if (count >= 10_000L) {

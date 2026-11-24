@@ -8,16 +8,32 @@ import android.text.InputType
 import android.text.TextWatcher
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.ActionMode
 import android.view.KeyEvent
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputConnectionWrapper
 import android.widget.EditText
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,25 +44,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.animateIntAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.indication
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -59,15 +66,12 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.ripple
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -94,6 +98,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -103,15 +108,24 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.creativeworkbench.writer.R
 import com.creativeworkbench.writer.WorkbenchApp
 import com.creativeworkbench.writer.core.data.Block
+import com.creativeworkbench.writer.core.data.NoteEntity
+import com.creativeworkbench.writer.core.data.NoteKind
 import com.creativeworkbench.writer.core.settings.FontSizePreset
+import com.creativeworkbench.writer.core.ai.AiActions
+import com.creativeworkbench.writer.core.ai.SelectionInfo
+import com.creativeworkbench.writer.ui.ai.AiPanel
+import com.creativeworkbench.writer.ui.ai.AiViewModel
+import com.creativeworkbench.writer.ui.ai.AiViewModelFactory
 import com.creativeworkbench.writer.ui.components.ActionSheet
 import com.creativeworkbench.writer.ui.components.SheetAction
-import com.creativeworkbench.writer.ui.theme.Motion
+import com.creativeworkbench.writer.ui.design.IconAction
+import com.creativeworkbench.writer.ui.design.Tag
 import com.creativeworkbench.writer.ui.editor.EditorViewModel
 import com.creativeworkbench.writer.ui.editor.EditorViewModelFactory
 import com.creativeworkbench.writer.ui.editor.FocusScrollTarget
 import com.creativeworkbench.writer.ui.editor.VisibleBlockBounds
 import com.creativeworkbench.writer.ui.editor.focusedBlockScrollTarget
+import com.creativeworkbench.writer.ui.theme.Motion
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -122,11 +136,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 fun EditorScreen(
     workId: String,
     chapterId: String,
+    notes: List<NoteEntity>,
+    notesEnabled: Boolean,
     onBack: () -> Unit,
     onOpenDirectory: () -> Unit
 ) {
     val application = LocalContext.current.applicationContext as Application
     val app = application as WorkbenchApp
+    val context = LocalContext.current
     val settings by app.container.settings.settings.collectAsStateWithLifecycle()
     val bodySize = when (settings.fontSize) {
         FontSizePreset.Small -> 15f
@@ -143,12 +160,54 @@ fun EditorScreen(
         factory = EditorViewModelFactory(application, chapterId)
     )
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val aiViewModel: AiViewModel = viewModel(
+        key = "ai-" + chapterId,
+        factory = AiViewModelFactory(application, workId, chapterId)
+    )
+    val aiState by aiViewModel.state.collectAsStateWithLifecycle()
+    var aiOpen by remember { mutableStateOf(false) }
+    var pendingSelection by remember { mutableStateOf<SelectionInfo?>(null) }
     val listState = rememberLazyListState()
     val density = LocalDensity.current
     val keyboard = LocalSoftwareKeyboardController.current
     val bottomMarginPx = with(density) { 12.dp.roundToPx() }
+    val positionPrefs = remember {
+        context.getSharedPreferences("editor_positions", Context.MODE_PRIVATE)
+    }
     var menuOpen by remember { mutableStateOf(false) }
     var blockMenuOpen by remember { mutableStateOf(false) }
+    var notesOpen by remember { mutableStateOf(false) }
+    var noteExpanded by remember { mutableStateOf(false) }
+    var restoredPosition by remember { mutableStateOf(false) }
+
+    // 继续上次位置：记住当前章的第一可见段和偏移。
+    LaunchedEffect(state.loading, state.blocks.size) {
+        if (!state.loading && !restoredPosition && state.blocks.isNotEmpty()) {
+            val saved = positionPrefs.getString(chapterId, null)
+            if (saved != null) {
+                val parts = saved.split('|')
+                val blockId = parts.firstOrNull()
+                val offset = parts.getOrNull(1)?.toIntOrNull() ?: 0
+                val index = state.blocks.indexOfFirst { it.id == blockId }
+                if (index >= 0) listState.scrollToItem(index, offset)
+            }
+            restoredPosition = true
+        }
+    }
+    LaunchedEffect(state.chapterNote) {
+        if (!state.loading) {
+            delay(900)
+            viewModel.persistChapterNote()
+        }
+    }
+    LaunchedEffect(chapterId) {
+        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+            .collectLatest { (index, offset) ->
+                delay(600)
+                val blockId = state.blocks.getOrNull(index)?.id ?: return@collectLatest
+                positionPrefs.edit().putString(chapterId, blockId + "|" + offset).apply()
+            }
+    }
 
     LaunchedEffect(state.activeBlockId) {
         val activeId = state.activeBlockId ?: return@LaunchedEffect
@@ -179,6 +238,7 @@ fun EditorScreen(
 
     BackHandler {
         keyboard?.hide()
+        viewModel.persistChapterNote()
         viewModel.flushAndBack(onBack)
     }
 
@@ -186,116 +246,177 @@ fun EditorScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) viewModel.refreshIfClean()
+            if (event == Lifecycle.Event.ON_PAUSE) viewModel.flush()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        state.workTitle.ifBlank { state.chapterTitle.ifBlank { "编辑器" } },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1
-                    )
-                },
-                navigationIcon = {
-                    IconButton(
-                        onClick = {
-                            keyboard?.hide()
-                            viewModel.flushAndBack(onBack)
-                        },
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "返回",
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(
-                        onClick = {
-                            keyboard?.hide()
-                            menuOpen = true
-                        },
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.MoreVert,
-                            contentDescription = "更多",
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
-                )
+    val activeBlockText = state.blocks.firstOrNull { it.id == state.activeBlockId }?.text
+    val chapterChars = state.blocks.sumOf { it.text.length }
+
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconAction(
+                icon = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "返回",
+                onClick = {
+                    keyboard?.hide()
+                    viewModel.persistChapterNote()
+                    viewModel.flushAndBack(onBack)
+                }
             )
-        }
-    ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
-            if (state.loading) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("正在打开章节…")
-                }
-            } else if (state.error != null && state.blocks.isEmpty()) {
-                Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-                    Text(
-                        state.error ?: "章节无法打开",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.error
+            Column(Modifier.weight(1f).padding(start = 4.dp)) {
+                Text(
+                    state.workTitle.ifBlank { "作品" },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+                Text(
+                    state.chapterTitle.ifBlank { "未命名章节" },
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
+            }
+            IconButton(
+                onClick = {
+                    pendingSelection = null
+                    keyboard?.hide()
+                    aiOpen = true
+                    aiViewModel.prepare(
+                        AiActions.CONTINUE,
+                        state.blocks,
+                        state.activeBlockId,
+                        null
+                    )
+                },
+                modifier = Modifier.size(44.dp)
+            ) {
+                Icon(
+                    painterResource(R.drawable.ic_sparkle),
+                    contentDescription = "AI 助手",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            if (notesEnabled) {
+                IconButton(onClick = { notesOpen = true }, modifier = Modifier.size(44.dp)) {
+                    Icon(
+                        painterResource(R.drawable.ic_notes),
+                        contentDescription = "笔记抽屉",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp)
                     )
                 }
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 12.dp, bottom = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    item {
-                        EditorHeader(
-                            chapterTitle = state.chapterTitle,
-                            wordCount = state.wordCount,
-                            saving = state.saving,
-                            dirty = state.dirty,
-                            error = state.error,
-                            empty = state.blocks.all { it.text.isBlank() },
-                            onStartWriting = {
-                                state.blocks.firstOrNull()?.let { block ->
-                                    viewModel.activate(block.id, 0)
-                                }
+            }
+            IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(44.dp)) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = "更多",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
+
+        if (state.loading) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("正在打开章节…", style = MaterialTheme.typography.bodyMedium)
+            }
+            return@Column
+        }
+        if (state.error != null && state.blocks.isEmpty()) {
+            Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                Text(
+                    state.error ?: "章节无法打开",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            return@Column
+        }
+
+        Column(Modifier.fillMaxSize().imePadding()) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 10.dp, bottom = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                item {
+                    EditorHeader(
+                        chapterTitle = state.chapterTitle,
+                        wordCount = state.wordCount,
+                        saving = state.saving,
+                        dirty = state.dirty,
+                        error = state.error,
+                        empty = state.blocks.all { it.text.isBlank() },
+                        note = state.chapterNote,
+                        noteExpanded = noteExpanded,
+                        onToggleNote = {
+                            if (noteExpanded) viewModel.persistChapterNote()
+                            noteExpanded = !noteExpanded
+                        },
+                        onNoteChange = {
+                            viewModel.setChapterNote(it)
+                        },
+                        warning = when {
+                            state.wordCount >= 50_000 -> "单章已超过 5 万字，建议拆分为多章"
+                            (activeBlockText?.length ?: 0) > 2000 -> "本段较长，建议按情节分段"
+                            else -> null
+                        },
+                        onStartWriting = {
+                            state.blocks.firstOrNull()?.let { block ->
+                                viewModel.activate(block.id, 0)
                             }
+                        }
+                    )
+                }
+                itemsIndexed(state.blocks, key = { _, block -> block.id }) { _, block ->
+                    if (state.activeBlockId == block.id) {
+                        ActiveBlockEditor(
+                            block = block,
+                            cursorOffset = state.cursorOffset,
+                            onTextChange = { viewModel.onTextChanged(block.id, it) },
+                            onSplitAt = { viewModel.splitBlock(block.id, it) },
+                            onMergePrevious = { viewModel.mergeWithPrevious(block.id) },
+                            onAiRewrite = { selected, start, end ->
+                                val blockId = state.activeBlockId ?: block.id
+                                pendingSelection = SelectionInfo(blockId, start, end, selected)
+                                keyboard?.hide()
+                                aiOpen = true
+                                aiViewModel.prepare(
+                                    AiActions.REWRITE,
+                                    state.blocks,
+                                    blockId,
+                                    SelectionInfo(blockId, start, end, selected)
+                                )
+                            },
+                            textSizeSp = bodySize,
+                            lineHeightSp = lineHeight,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    } else {
+                        InactiveBlock(
+                            block = block,
+                            textSizeSp = bodySize,
+                            lineHeightSp = lineHeight,
+                            onActivate = { offset -> viewModel.activate(block.id, offset) }
                         )
                     }
-                    itemsIndexed(state.blocks, key = { _, block -> block.id }) { _, block ->
-                        if (state.activeBlockId == block.id) {
-                            ActiveBlockEditor(
-                                block = block,
-                                cursorOffset = state.cursorOffset,
-                                onTextChange = { viewModel.onTextChanged(block.id, it) },
-                                onSplitAt = { viewModel.splitBlock(block.id, it) },
-                                onMergePrevious = { viewModel.mergeWithPrevious(block.id) },
-                                textSizeSp = bodySize,
-                                lineHeightSp = lineHeight,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        } else {
-                            InactiveBlock(
-                                block = block,
-                                onActivate = { offset -> viewModel.activate(block.id, offset) }
-                            )
-                        }
-                    }
-                    item {
+                }
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                        horizontalArrangement = Arrangement.Center
+                    ) {
                         TextButton(
-                            onClick = { viewModel.insertAfter(state.blocks.lastOrNull()?.id.orEmpty()) },
-                            modifier = Modifier.fillMaxWidth()
+                            onClick = { viewModel.insertAfter(state.blocks.lastOrNull()?.id.orEmpty()) }
                         ) {
                             Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
@@ -303,33 +424,38 @@ fun EditorScreen(
                         }
                     }
                 }
+            }
 
-                AnimatedVisibility(
-                    visible = !state.loading,
-                    enter = slideInVertically(
-                        animationSpec = tween(Motion.Medium, easing = Motion.EmphasizedDecelerate)
-                    ) { fullHeight -> fullHeight } + fadeIn(tween(Motion.Fast)),
-                    exit = slideOutVertically(
-                        animationSpec = tween(Motion.Fast, easing = Motion.EmphasizedAccelerate)
-                    ) { fullHeight -> fullHeight } + fadeOut(tween(Motion.Fast))
-                ) {
-                    EditorToolbar(
-                        undoAvailable = state.undoAvailable,
-                        redoAvailable = state.redoAvailable,
-                        hasActiveBlock = state.activeBlockId != null,
-                        onUndo = viewModel::undo,
-                        onRedo = viewModel::redo,
-                        onAdd = {
-                            val id = state.activeBlockId ?: state.blocks.lastOrNull()?.id
-                            if (id != null) viewModel.insertAfter(id)
-                        },
-                        onParagraph = {
-                            keyboard?.hide()
-                            blockMenuOpen = true
-                        },
-                        onHideKeyboard = { keyboard?.hide() }
-                    )
-                }
+            AnimatedVisibility(
+                visible = true,
+                enter = slideInVertically(
+                    animationSpec = tween(Motion.Medium, easing = Motion.EmphasizedDecelerate)
+                ) { full -> full } + fadeIn(tween(Motion.Fast)),
+                exit = slideOutVertically(
+                    animationSpec = tween(Motion.Fast, easing = Motion.EmphasizedAccelerate)
+                ) { full -> full } + fadeOut(tween(Motion.Fast))
+            ) {
+                EditorToolbar(
+                    undoAvailable = state.undoAvailable,
+                    redoAvailable = state.redoAvailable,
+                    hasActiveBlock = state.activeBlockId != null,
+                    notesEnabled = notesEnabled,
+                    onUndo = viewModel::undo,
+                    onRedo = viewModel::redo,
+                    onAdd = {
+                        val id = state.activeBlockId ?: state.blocks.lastOrNull()?.id
+                        if (id != null) viewModel.insertAfter(id)
+                    },
+                    onParagraph = {
+                        keyboard?.hide()
+                        blockMenuOpen = true
+                    },
+                    onNotes = {
+                        keyboard?.hide()
+                        notesOpen = true
+                    },
+                    onHideKeyboard = { keyboard?.hide() }
+                )
             }
         }
     }
@@ -337,15 +463,12 @@ fun EditorScreen(
     if (menuOpen) {
         ActionSheet(
             title = state.chapterTitle.ifBlank { "章节" },
-            subtitle = state.wordCount.toString() + " 字",
+            subtitle = state.wordCount.toString() + " 字" + if (chapterChars >= 50_000) " · 偏长" else "",
             actions = listOf(
                 SheetAction(
                     label = "作品目录",
                     icon = Icons.Default.List,
-                    onClick = {
-                        keyboard?.hide()
-                        viewModel.flushAndBack(onOpenDirectory)
-                    }
+                    onClick = { viewModel.flushAndBack(onOpenDirectory) }
                 ),
                 SheetAction(
                     label = "立即保存",
@@ -381,6 +504,88 @@ fun EditorScreen(
             onDismiss = { blockMenuOpen = false }
         )
     }
+
+    if (notesOpen) {
+        NotesDrawer(
+            notes = notes.filter { it.workId == null || it.workId == workId || NoteKind.setting.contains(it.kind) },
+            onInsert = { note ->
+                keyboard?.hide()
+                viewModel.insertNote(note.content)
+                notesOpen = false
+            },
+            onDismiss = { notesOpen = false }
+        )
+    }
+
+    if (aiOpen) {
+        AiPanel(
+            state = aiState,
+            selection = pendingSelection,
+            hasContent = state.blocks.any { it.text.isNotBlank() },
+            hasActiveBlock = state.activeBlockId != null,
+            onAction = { actionId ->
+                val selection = if (actionId == AiActions.REWRITE) pendingSelection else null
+                aiViewModel.prepare(actionId, state.blocks, state.activeBlockId, selection)
+            },
+            onGenerate = { aiViewModel.generate(state.revision, viewModel.contentHash()) },
+            onOverflowRetry = {
+                val actionId = aiState.action?.id ?: AiActions.CONTINUE
+                val selection = if (actionId == AiActions.REWRITE) pendingSelection else null
+                aiViewModel.prepare(actionId, state.blocks, state.activeBlockId, selection, allowOverflow = true)
+            },
+            onCancel = { aiViewModel.cancel() },
+            onDismiss = {
+                aiOpen = false
+                aiViewModel.reset()
+            },
+            onWrite = { text ->
+                val action = aiState.action
+                if (action?.id == AiActions.REWRITE) {
+                    pendingSelection?.let { selection ->
+                        val ok = viewModel.applyAiRewrite(
+                            selection.blockId,
+                            selection.start,
+                            selection.end,
+                            text
+                        )
+                        if (ok) {
+                            aiViewModel.saveUndoInfo(
+                                mode = "replace",
+                                blockId = selection.blockId,
+                                start = selection.start,
+                                end = selection.start + text.length,
+                                before = selection.text,
+                                after = text,
+                                insertedIds = emptyList()
+                            )
+                        }
+                    }
+                } else {
+                    val ids = viewModel.applyAiContinue(text)
+                    aiViewModel.saveUndoInfo(
+                        mode = "insert",
+                        blockId = null,
+                        start = -1,
+                        end = -1,
+                        before = "",
+                        after = text,
+                        insertedIds = ids
+                    )
+                }
+                aiOpen = false
+                aiViewModel.reset()
+                pendingSelection = null
+            },
+            onJumpToBlock = { blockId ->
+                val index = blockId.removePrefix("b").toIntOrNull()
+                if (index != null) {
+                    // 列表第 0 项是章节头
+                    aiOpen = false
+                    viewModel.activate(state.blocks.getOrNull(index)?.id ?: "", 0)
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -391,6 +596,11 @@ private fun EditorHeader(
     dirty: Boolean,
     error: String?,
     empty: Boolean,
+    note: String,
+    noteExpanded: Boolean,
+    onToggleNote: () -> Unit,
+    onNoteChange: (String) -> Unit,
+    warning: String?,
     onStartWriting: () -> Unit
 ) {
     val animatedWordCount by animateIntAsState(
@@ -404,10 +614,11 @@ private fun EditorHeader(
         dirty -> "未保存"
         else -> "已保存"
     }
-    Column(Modifier.padding(bottom = 10.dp)) {
+    Column(Modifier.padding(bottom = 6.dp)) {
         Text(
             chapterTitle.ifBlank { "未命名章节" },
-            style = MaterialTheme.typography.titleLarge
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onSurface
         )
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -416,7 +627,7 @@ private fun EditorHeader(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(10.dp))
             Crossfade(
                 targetState = saveLabel,
                 animationSpec = tween(Motion.Fast),
@@ -428,9 +639,59 @@ private fun EditorHeader(
                     color = if (error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (noteExpanded) "收起备注" else "备注",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onToggleNote)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
+        AnimatedVisibility(visible = noteExpanded) {
+            Column {
+                Spacer(Modifier.height(8.dp))
+                Surface(
+                    shape = MaterialTheme.shapes.small,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                ) {
+                    Box(Modifier.fillMaxWidth().height(96.dp).padding(10.dp)) {
+                        if (note.isEmpty()) {
+                            Text(
+                                "本章备注：给 AI 的提醒、待改的地方，都写这里；不计字数。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        BasicTextField(
+                            value = note,
+                            onValueChange = onNoteChange,
+                            textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+            }
+        }
+        if (warning != null) {
+            Spacer(Modifier.height(8.dp))
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.secondaryContainer
+            ) {
+                Text(
+                    warning,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
         }
         if (empty) {
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(26.dp))
             Text(
                 "点这里开始写，回车分段。",
                 style = MaterialTheme.typography.bodyMedium,
@@ -441,11 +702,17 @@ private fun EditorHeader(
                     .padding(vertical = 6.dp)
             )
         }
+        Spacer(Modifier.height(10.dp))
     }
 }
 
 @Composable
-private fun InactiveBlock(block: Block, onActivate: (Int) -> Unit) {
+private fun InactiveBlock(
+    block: Block,
+    textSizeSp: Float,
+    lineHeightSp: Float,
+    onActivate: (Int) -> Unit
+) {
     var layout by remember(block.id) { mutableStateOf<TextLayoutResult?>(null) }
     val interaction = remember { MutableInteractionSource() }
     val text = block.text.ifBlank { " " }
@@ -454,10 +721,10 @@ private fun InactiveBlock(block: Block, onActivate: (Int) -> Unit) {
         onTextLayout = { layout = it },
         modifier = Modifier
             .fillMaxWidth()
-            .indication(interaction, ripple())
+            .indication(interaction, androidx.compose.material3.ripple())
             .pointerInput(block.id) {
                 detectTapGestures(
-                    onPress = { offset ->
+                    onPress = { offset: androidx.compose.ui.geometry.Offset ->
                         val press = PressInteraction.Press(offset)
                         interaction.emit(press)
                         val released = tryAwaitRelease()
@@ -469,37 +736,41 @@ private fun InactiveBlock(block: Block, onActivate: (Int) -> Unit) {
                     onActivate(layout?.getOffsetForPosition(position) ?: 0)
                 }
             }
-            .padding(vertical = 4.dp),
-        style = MaterialTheme.typography.bodyLarge,
-        color = if (block.text.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+            .padding(vertical = 6.dp),
+        style = MaterialTheme.typography.bodyLarge.copy(fontSize = textSizeSp.sp, lineHeight = lineHeightSp.sp),
+        color = if (block.text.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
         else MaterialTheme.colorScheme.onSurface
     )
 }
 
 /**
- * 键盘上方的浮动工具条（纯纯写作的快捷输入栏位置）。
- * 贴住输入法上沿，五个等宽触控块，手指不用离开键盘区太远。
+ * 键盘上方的工具条：六个等宽触控块，贴住输入法上沿。
  */
 @Composable
 private fun EditorToolbar(
     undoAvailable: Boolean,
     redoAvailable: Boolean,
     hasActiveBlock: Boolean,
+    notesEnabled: Boolean,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
     onAdd: () -> Unit,
     onParagraph: () -> Unit,
+    onNotes: () -> Unit,
     onHideKeyboard: () -> Unit
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 3.dp,
-        shadowElevation = 8.dp,
-        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
+        tonalElevation = 0.dp,
+        shadowElevation = 10.dp,
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 4.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -507,6 +778,13 @@ private fun EditorToolbar(
             ToolbarAction(painterResource(R.drawable.ic_redo), "重做", redoAvailable, onRedo, Modifier.weight(1f))
             ToolbarAction(Icons.Default.Add, "新段", hasActiveBlock, onAdd, Modifier.weight(1f))
             ToolbarAction(Icons.Default.List, "段落", hasActiveBlock, onParagraph, Modifier.weight(1f))
+            ToolbarAction(
+                painterResource(R.drawable.ic_notes),
+                "笔记",
+                notesEnabled,
+                onNotes,
+                Modifier.weight(1f)
+            )
             ToolbarAction(Icons.Default.KeyboardArrowDown, "收起", true, onHideKeyboard, Modifier.weight(1f))
         }
     }
@@ -521,7 +799,7 @@ private fun ToolbarAction(
     modifier: Modifier = Modifier
 ) {
     ToolbarActionContent(label, enabled, onClick, modifier) { tint ->
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
     }
 }
 
@@ -534,7 +812,7 @@ private fun ToolbarAction(
     modifier: Modifier = Modifier
 ) {
     ToolbarActionContent(label, enabled, onClick, modifier) { tint ->
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
     }
 }
 
@@ -558,7 +836,7 @@ private fun ToolbarActionContent(
             .clip(RoundedCornerShape(12.dp))
             .clickable(
                 interactionSource = interaction,
-                indication = ripple(),
+                indication = androidx.compose.material3.ripple(),
                 enabled = enabled,
                 onClick = onClick
             )
@@ -575,6 +853,78 @@ private fun ToolbarActionContent(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NotesDrawer(
+    notes: List<NoteEntity>,
+    onInsert: (NoteEntity) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 24.dp, vertical = 4.dp)
+        ) {
+            Text("笔记", style = MaterialTheme.typography.titleLarge)
+            Text(
+                "点一条，把正文插入到当前段之后（可撤销）",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(12.dp))
+            if (notes.isEmpty()) {
+                Text(
+                    "还没有笔记。去「笔记」页建人物和设定，AI 会强制带上；素材类可以在这里插入正文。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 24.dp)
+                )
+            } else {
+                LazyColumn(Modifier.height(420.dp)) {
+                    itemsIndexed(notes, key = { _, note -> note.id }) { _, note ->
+                        Surface(
+                            onClick = { onInsert(note) },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            shape = MaterialTheme.shapes.medium,
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh
+                        ) {
+                            Column(Modifier.padding(14.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Tag(NoteKind.label(note.kind), active = NoteKind.setting.contains(note.kind))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        note.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1
+                                    )
+                                }
+                                if (note.content.isNotBlank()) {
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        note.content.replace('\n', ' '),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(20.dp))
+        }
+    }
+}
+
 @Composable
 private fun ActiveBlockEditor(
     block: Block,
@@ -582,6 +932,7 @@ private fun ActiveBlockEditor(
     onTextChange: (String) -> Unit,
     onSplitAt: (Int) -> Unit,
     onMergePrevious: () -> Unit,
+    onAiRewrite: (text: String, start: Int, end: Int) -> Unit,
     textSizeSp: Float,
     lineHeightSp: Float,
     modifier: Modifier
@@ -607,6 +958,28 @@ private fun ActiveBlockEditor(
             setTextColor(textColor)
             setText(block.text)
             setSelection(text.length)
+            customSelectionActionModeCallback = object : ActionMode.Callback {
+                override fun onCreateActionMode(mode: ActionMode?, menu: Menu?): Boolean {
+                    menu?.add(0, MENU_AI_REWRITE, 0, "AI 改写")
+                        ?.setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
+                    return true
+                }
+
+                override fun onPrepareActionMode(mode: ActionMode?, menu: Menu?): Boolean = false
+
+                override fun onActionItemClicked(mode: ActionMode?, item: MenuItem?): Boolean {
+                    if (item?.itemId != MENU_AI_REWRITE) return false
+                    val start = selectionStart
+                    val end = selectionEnd
+                    if (start in 0 until end && end <= text.length) {
+                        onAiRewrite(text.substring(start, end), start, end)
+                    }
+                    mode?.finish()
+                    return true
+                }
+
+                override fun onDestroyActionMode(mode: ActionMode?) = Unit
+            }
         }
     }
 
@@ -677,9 +1050,10 @@ private fun ActiveBlockEditor(
 
 /**
  * 软键盘的退格在段首不会触发 OnKeyListener；用 InputConnectionWrapper
- * 拦截 deleteSurroundingText 作为补充。剩下少数输入法仍可能不发删除事件，
- * 所以段落菜单始终保留「合并到上一段」兜底。
+ * 拦截 deleteSurroundingText 作为补充。
  */
+private const val MENU_AI_REWRITE = 1001
+
 private class BlockEditText(context: Context) : EditText(context) {
     var onBackspaceAtStart: (() -> Unit)? = null
 

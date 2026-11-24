@@ -283,12 +283,68 @@ class ChapterRepository(
                 )
             }
             files.delete(chapterId)
+            files.deleteSnapshots(chapterId)
         }
     }
 
     suspend fun renameChapter(chapterId: String, title: String) = withContext(Dispatchers.IO) {
         val chapter = db.chapterDao().byId(chapterId) ?: return@withContext
         db.chapterDao().update(chapter.copy(title = title.trim(), updatedAt = System.currentTimeMillis()))
+    }
+
+    /** 写入前存快照：全局最多 200 个，按时间淘汰最早的。 */
+    suspend fun saveSnapshot(chapterId: String, blocks: List<Block>) = withContext(Dispatchers.IO) {
+        writeMutex.withLock {
+            val now = System.currentTimeMillis()
+            val chapter = db.chapterDao().byId(chapterId) ?: return@withLock
+            val count = db.snapshotDao().count()
+            val file = files.writeSnapshot(
+                chapterId,
+                now,
+                count,
+                ChapterContent(chapterId, chapter.revision, blocks, now)
+            )
+            db.snapshotDao().insert(
+                SnapshotEntity(
+                    id = UUID.randomUUID().toString(),
+                    chapterId = chapterId,
+                    createdAtMs = now,
+                    seq = count,
+                    path = file.absolutePath
+                )
+            )
+            val all = db.snapshotDao().all()
+            if (all.size > 200) {
+                all.take(all.size - 200).forEach { old ->
+                    files.deleteSnapshot(old.path)
+                    db.snapshotDao().delete(old.id)
+                }
+            }
+        }
+    }
+
+    suspend fun updateChapterNote(chapterId: String, note: String) = withContext(Dispatchers.IO) {
+        writeMutex.withLock {
+            val chapter = db.chapterDao().byId(chapterId) ?: return@withLock
+            db.chapterDao().update(chapter.copy(note = note, updatedAt = System.currentTimeMillis()))
+        }
+    }
+
+    /** 上移 / 下移：只交换 orderIndex，v1 不做拖拽。 */
+    suspend fun moveChapter(chapterId: String, delta: Int) = withContext(Dispatchers.IO) {
+        writeMutex.withLock {
+            val chapter = db.chapterDao().byId(chapterId) ?: return@withLock
+            val siblings = db.chapterDao().listByWork(chapter.workId)
+            val index = siblings.indexOfFirst { it.id == chapterId }
+            val target = index + delta
+            if (index < 0 || target < 0 || target >= siblings.size) return@withLock
+            val other = siblings[target]
+            val now = System.currentTimeMillis()
+            db.withTransaction {
+                db.chapterDao().update(chapter.copy(orderIndex = other.orderIndex, updatedAt = now))
+                db.chapterDao().update(other.copy(orderIndex = chapter.orderIndex, updatedAt = now))
+            }
+        }
     }
 
     suspend fun updateSummary(chapterId: String, summary: String?) = withContext(Dispatchers.IO) {

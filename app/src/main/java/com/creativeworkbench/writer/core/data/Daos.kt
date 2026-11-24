@@ -54,8 +54,14 @@ interface ChapterDao {
 
 @Dao
 interface NoteDao {
+    @Query("SELECT * FROM notes ORDER BY pinned DESC, updatedAtMs DESC")
+    fun observeAll(): Flow<List<NoteEntity>>
+
     @Query("SELECT * FROM notes WHERE workId IS NULL OR workId = :workId ORDER BY pinned DESC, updatedAtMs DESC")
     fun observeForWork(workId: String?): Flow<List<NoteEntity>>
+
+    @Query("SELECT * FROM notes WHERE id = :id")
+    suspend fun byId(id: String): NoteEntity?
 
     @Query("SELECT COUNT(*) FROM notes")
     suspend fun count(): Int
@@ -63,8 +69,17 @@ interface NoteDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(note: NoteEntity)
 
+    @Query("UPDATE notes SET pinned = :pinned, updatedAtMs = :now WHERE id = :id")
+    suspend fun setPinned(id: String, pinned: Boolean, now: Long)
+
+    @Query("UPDATE notes SET aiReference = :value, updatedAtMs = :now WHERE id = :id")
+    suspend fun setAiReference(id: String, value: Boolean, now: Long)
+
     @Query("DELETE FROM notes WHERE id = :id")
     suspend fun delete(id: String)
+
+    @Query("DELETE FROM notes")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -92,6 +107,9 @@ interface SnapshotDao {
 
     @Query("SELECT * FROM snapshots WHERE chapterId = :chapterId ORDER BY createdAtMs DESC")
     suspend fun listForChapter(chapterId: String): List<SnapshotEntity>
+
+    @Query("SELECT * FROM snapshots ORDER BY createdAtMs ASC")
+    suspend fun all(): List<SnapshotEntity>
 
     @Query("SELECT COUNT(*) FROM snapshots")
     suspend fun count(): Int
