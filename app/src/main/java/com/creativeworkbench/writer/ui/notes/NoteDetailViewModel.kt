@@ -91,6 +91,24 @@ class NoteDetailViewModel(
             }
     }
 
+    /** 复制一份到另一部作品：副本独立，改一边不影响另一边。 */
+    fun duplicateTo(workId: String, onDone: (Boolean) -> Unit) {
+        val note = _state.value.note ?: return
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            val copy = note.copy(
+                id = UUID.randomUUID().toString(),
+                workId = workId,
+                title = note.title + "（副本）",
+                createdAtMs = now,
+                updatedAtMs = now
+            )
+            runCatching { repository.upsert(copy) }
+                .onSuccess { onDone(true) }
+                .onFailure { onDone(false) }
+        }
+    }
+
     fun delete(onDone: () -> Unit) {
         viewModelScope.launch {
             runCatching { repository.delete(noteId) }

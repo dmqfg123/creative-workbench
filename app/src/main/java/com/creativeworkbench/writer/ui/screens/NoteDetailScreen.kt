@@ -1,6 +1,7 @@
 package com.creativeworkbench.writer.ui.screens
 
 import android.app.Application
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -45,7 +46,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.flow.first
+import com.creativeworkbench.writer.WorkbenchApp
 import com.creativeworkbench.writer.core.data.NoteKind
+import com.creativeworkbench.writer.core.data.WorkEntity
+import com.creativeworkbench.writer.ui.components.ActionSheet
+import com.creativeworkbench.writer.ui.components.SheetAction
 import com.creativeworkbench.writer.ui.design.IconAction
 import com.creativeworkbench.writer.ui.design.PillButton
 import com.creativeworkbench.writer.ui.design.Tag
@@ -64,7 +70,8 @@ fun NoteDetailScreen(
     kind: String,
     onBack: () -> Unit
 ) {
-    val application = LocalContext.current.applicationContext as Application
+    val context = LocalContext.current
+    val application = context.applicationContext as Application
     val actualId = remember(noteId) { if (noteId == "new") newNoteId() else noteId }
     val viewModel: NoteDetailViewModel = viewModel(
         key = "note-" + actualId,
@@ -72,10 +79,40 @@ fun NoteDetailScreen(
     )
     val state by viewModel.state.collectAsStateWithLifecycle()
     var confirmDelete by remember { mutableStateOf(false) }
+    var works by remember { mutableStateOf<List<WorkEntity>>(emptyList()) }
+    var showCopyTo by remember { mutableStateOf(false) }
     val note = state.note
+
+    LaunchedEffect(Unit) {
+        works = (application as WorkbenchApp).container.database.workDao().observeAll().first()
+    }
 
     DisposableEffect(Unit) {
         onDispose { viewModel.flush() }
+    }
+
+    if (showCopyTo) {
+        ActionSheet(
+            title = "复制到哪部作品",
+            subtitle = "会生成独立副本，改副本不影响原设定",
+            actions = works.map { work ->
+                SheetAction(
+                    label = work.title,
+                    description = if (work.id == note?.workId) "当前作品" else "",
+                    onClick = {
+                        viewModel.duplicateTo(work.id) { ok ->
+                            Toast.makeText(
+                                context,
+                                if (ok) "已复制到《" + work.title + "》" else "复制失败",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        showCopyTo = false
+                    }
+                )
+            },
+            onDismiss = { showCopyTo = false }
+        )
     }
 
     if (confirmDelete) {
@@ -125,6 +162,17 @@ fun NoteDetailScreen(
                     contentDescription = "置顶",
                     tint = if (note?.pinned == true) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            androidx.compose.material3.IconButton(
+                onClick = { showCopyTo = true },
+                modifier = Modifier.size(44.dp)
+            ) {
+                Icon(
+                    painterResource(R.drawable.ic_copy),
+                    contentDescription = "复制到其他作品",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(22.dp)
                 )
             }
