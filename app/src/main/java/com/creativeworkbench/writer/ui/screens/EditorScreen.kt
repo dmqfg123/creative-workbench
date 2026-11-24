@@ -655,7 +655,9 @@ private fun EditorHeader(
     Column(Modifier.padding(bottom = 6.dp)) {
         Text(
             chapterTitle.ifBlank { "未命名章节" },
-            style = MaterialTheme.typography.headlineMedium,
+            style = MaterialTheme.typography.headlineMedium.copy(
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Serif
+            ),
             color = MaterialTheme.colorScheme.onSurface
         )
         Spacer(Modifier.height(6.dp))
@@ -665,7 +667,11 @@ private fun EditorHeader(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(Modifier.width(10.dp))
+            Text(
+                "  ·  ",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+            )
             Crossfade(
                 targetState = saveLabel,
                 animationSpec = tween(Motion.Fast),

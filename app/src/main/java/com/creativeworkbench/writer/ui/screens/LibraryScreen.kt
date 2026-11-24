@@ -228,7 +228,8 @@ fun LibraryScreen(
                     WorkRow(
                         work = work,
                         onClick = { onOpenWork(work.id) },
-                        onMenu = { menuWork = work }
+                        onMenu = { menuWork = work },
+                        modifier = Modifier.animateItem()
                     )
                 }
                 if (query.isBlank()) {
@@ -379,10 +380,15 @@ fun LibraryScreen(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun WorkRow(work: WorkEntity, onClick: () -> Unit, onMenu: () -> Unit) {
+private fun WorkRow(
+    work: WorkEntity,
+    onClick: () -> Unit,
+    onMenu: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Surface(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .pressScale(interaction, 0.985f)
             .combinedClickable(
@@ -489,7 +495,7 @@ private fun NewWorkCard(onClick: () -> Unit) {
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp),
+            modifier = Modifier.fillMaxWidth().height(52.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -497,9 +503,9 @@ private fun NewWorkCard(onClick: () -> Unit) {
                 Icons.Default.Add,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(18.dp)
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(6.dp))
             Text(
                 "新作品",
                 style = MaterialTheme.typography.labelLarge,
@@ -681,5 +687,12 @@ private fun formatWords(count: Long): String =
 
 private fun formatTime(time: Long): String {
     if (time <= 0L) return "未打开"
-    return SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(time))
+    val now = System.currentTimeMillis()
+    val today = SimpleDateFormat("yyyyDDD", Locale.CHINA).format(Date(now))
+    val target = SimpleDateFormat("yyyyDDD", Locale.CHINA).format(Date(time))
+    val clock = SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(time))
+    return when {
+        target == today -> "今天 " + clock
+        else -> SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(time))
+    }
 }

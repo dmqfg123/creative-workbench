@@ -130,13 +130,11 @@ fun DataSettingsScreen(onBack: () -> Unit) {
         }
     }
 
-    val workExportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("text/plain")
-    ) { uri ->
+    fun finishExport(uri: android.net.Uri?, markdown: Boolean) {
         val target = exportTarget
         if (uri != null && target != null) {
             scope.launch {
-                val result = backup.exportWork(target.id, exportMarkdown, uri)
+                val result = backup.exportWork(target.id, markdown, uri)
                 Toast.makeText(
                     context,
                     if (result.isSuccess) "已导出《" + target.title + "》" else "导出失败",
@@ -144,8 +142,20 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                 ).show()
                 exportTarget = null
             }
+        } else {
+            exportTarget = null
         }
     }
+
+    val markdownExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/markdown")
+    ) { uri -> finishExport(uri, markdown = true) }
+
+    val txtExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri -> finishExport(uri, markdown = false) }
+
+    var formatPicker by remember { mutableStateOf(false) }
 
     val crashExportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/plain")
@@ -178,11 +188,37 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                     onClick = {
                         workPicker = false
                         exportTarget = work
-                        workExportLauncher.launch(work.title + ".md")
+                        formatPicker = true
                     }
                 )
             },
             onDismiss = { workPicker = false }
+        )
+    }
+
+    if (formatPicker) {
+        ActionSheet(
+            title = "导出格式",
+            subtitle = exportTarget?.title,
+            actions = listOf(
+                SheetAction(
+                    label = "Markdown（.md）",
+                    description = "作品名一级标题，章二级标题",
+                    onClick = {
+                        formatPicker = false
+                        markdownExportLauncher.launch((exportTarget?.title ?: "作品") + ".md")
+                    }
+                ),
+                SheetAction(
+                    label = "纯文本（.txt）",
+                    description = "空行 + 章标题，不带头部符号",
+                    onClick = {
+                        formatPicker = false
+                        txtExportLauncher.launch((exportTarget?.title ?: "作品") + ".txt")
+                    }
+                )
+            ),
+            onDismiss = { formatPicker = false }
         )
     }
 
