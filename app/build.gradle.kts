@@ -14,8 +14,8 @@ android {
         applicationId = "com.creativeworkbench.writer"
         minSdk = 29
         targetSdk = 34
-        versionCode = 20
-        versionName = "0.9.0"
+        versionCode = 21
+        versionName = "0.10.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -40,7 +40,10 @@ android {
             }
         }
         release {
-            isMinifyEnabled = false
+            // R8：缩 dex + 删无用资源。自用 App 的 APK 从 21.7 MB 降到十几 MB，
+            // 类加载和常驻内存都会小一点；Room / kotlinx.serialization / Compose 都自带规则。
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = if (projectDebugKeystore.exists()) {
                 signingConfigs.getByName("projectDebug")

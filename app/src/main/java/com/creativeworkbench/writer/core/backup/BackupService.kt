@@ -323,24 +323,56 @@ class BackupService(
     /** 每天一份到 Download/雨刮模拟器备份/，不需要用户选目录。 */
     suspend fun writeDailyPublicBackup(): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            val bundle = buildBundle()
-            val text = json.encodeToString(BackupBundle.serializer(), bundle)
-            val bytes = java.io.ByteArrayOutputStream().use { out ->
-                GZIPOutputStream(out).use { it.write(text.toByteArray(Charsets.UTF_8)) }
-                out.toByteArray()
-            }
-            val name = "雨刮模拟器备份-" +
-                SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date()) + ".json.gz"
-            PublicBackupStore.write(context, name, bytes).getOrThrow()
-            settings.markSafBackup(System.currentTimeMillis())
-            name
+            writeDailyPublicBackupText(json.encodeToString(BackupBundle.serializer(), buildBundle()))
         }
+    }
+
+    private fun writeDailyPublicBackupText(text: String): String {
+        val bytes = java.io.ByteArrayOutputStream().use { out ->
+            GZIPOutputStream(out).use { it.write(text.toByteArray(Charsets.UTF_8)) }
+            out.toByteArray()
+        }
+        val name = "雨刮模拟器备份-" +
+            SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date()) + ".json.gz"
+        PublicBackupStore.write(context, name, bytes).getOrThrow()
+        settings.markSafBackup(System.currentTimeMillis())
+        return name
     }
 
     suspend fun autoDailyPublicBackupIfNeeded() = withContext(Dispatchers.IO) {
         val last = settings.settings.value.lastSafBackupAt ?: 0L
         if (last > 0L && isSameDay(last, System.currentTimeMillis())) return@withContext
         runCatching { writeDailyPublicBackup() }
+    }
+
+    /**
+     * 启动时的自动备份：**整个备份只构建一次**，本机与 Download 两处复用同一份文本。
+     * 之前两个 ifNeeded 各构建一次（各读一遍全部章节文件 + 各压一次 gzip），
+     * 30 章 29 万字的库上等于白干一倍活。
+     */
+    suspend fun autoBackupOnStart() = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val needLocal = (settings.settings.value.lastBackupAt ?: 0L).let { it <= 0L || !isSameDay(it, now) }
+        val needPublic = (settings.settings.value.lastSafBackupAt ?: 0L).let { it <= 0L || !isSameDay(it, now) }
+        if (!needLocal && !needPublic) return@withContext
+        runCatching {
+            val text = json.encodeToString(BackupBundle.serializer(), buildBundle())
+            if (needLocal) {
+                val hash = sha256(text)
+                val stampFile = File(context.filesDir, "workbench/backups/.last-hash")
+                val previous = runCatching { stampFile.readText().trim() }.getOrNull()
+                if (previous == hash) {
+                    settings.markBackup(now)
+                } else {
+                    writeLocalBackupText(text)
+                    stampFile.parentFile?.mkdirs()
+                    runCatching { stampFile.writeText(hash) }
+                }
+            }
+            if (needPublic) {
+                runCatching { writeDailyPublicBackupText(text) }
+            }
+        }
     }
 
     /**

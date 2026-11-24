@@ -15,10 +15,10 @@ class WorkbenchApp : Application() {
         super.onCreate()
         container = AppContainer(this)
         CrashLogger.install(this)
-        // 启动时补一次当天备份；失败不阻塞启动。
+        // 启动时的当天备份：推迟 1.5 秒等首帧画完；整个备份只构建一次，本机 + Download 共用。
         CoroutineScope(Dispatchers.IO).launch {
-            runCatching { container.backup.autoBackupIfNeeded() }
-            runCatching { container.backup.autoDailyPublicBackupIfNeeded() }
+            kotlinx.coroutines.delay(1500)
+            runCatching { container.backup.autoBackupOnStart() }
         }
     }
 }

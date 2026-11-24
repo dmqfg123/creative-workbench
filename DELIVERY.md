@@ -1,20 +1,27 @@
-# 阶段性交付说明（0.9.0）
+# 阶段性交付说明（0.10.0）
 
-> 日期：2026-11-24 ｜ 代码：E:\AIbendi\work\creative-workbench（tag v0.9.0）｜ 文档：E:\AIbendi\文学创作平台项目
+> 日期：2026-11-24 ｜ 代码：E:\AIbendi\work\creative-workbench（tag v0.10.0）｜ 文档：E:\AIbendi\文学创作平台项目
 > 状态：S1–S5 落地；PRD 逐条核对后的 9 处缺口已补；真机回归通过。
 
 ## 产物
 
 | 文件 | 大小 | SHA-256 |
 |---|---|---|
-| apk/雨刮模拟器_0.9.0_release.apk | 21,699,730 B | 343038A7FD30902EFC9D1643C59966D11E5020025460B5B185440CD4641C0A4F |
-| apk/雨刮模拟器_0.9.0_debug.apk | 28,864,555 B | AC76C7F0852FC7A04145D2F2C29C204CF62830CBFF89F2E79F2695B1F7FCAB4B |
+| apk/雨刮模拟器_0.10.0_release.apk | 3,690,510 B | 5AFE582EB522B7CC78020BD790582FABBE507852B9BDD9113FC7BFAE172A7653 |
+| apk/雨刮模拟器_0.10.0_debug.apk | 28,864,551 B | 78DB6EF854ACAFF4452BB22F6C13A17A17A65EE7042A7656E83EE5F8CF216D2E |
 
-- package：com.creativeworkbench.writer；versionCode 20 / versionName 0.9.0；minSdk 29 / targetSdk 34 / compileSdk 34。
+- package：com.creativeworkbench.writer；versionCode 21 / versionName 0.10.0；minSdk 29 / targetSdk 34 / compileSdk 34。
 - 签名：项目内 keystore/debug.keystore（固定，可一直覆盖安装、数据保留）。这是自用签名，不是商店发布签名；要换成正式发布签名，需要「导出备份 → 卸载 → 装新签名 → 导入备份」一次，之后固定用它。
 - 真机：Redmi Note 11 5G（Android 13 / HyperOS）。0.4.9 → 0.5.0 覆盖安装，作品/章节/笔记/设置全保留。
 
-## 本轮改动（0.9.0）
+## 本轮改动（0.10.0）
+
+- release 开 R8：APK 3.5 MB（−84%），冷启动 −27%，PSS −21%。
+- WB_PERF 打点只在 debug：输入 p95 18→12 ms，janky 11.9%→0%。
+- 启动备份只构建一次 + 推迟到首帧后；字数抽检推迟 2.5 s。
+- 混淆 mapping 存档：apk/mapping_0.10.0.txt。
+
+## 上一轮（0.9.0）
 
 - 四处动效：AI 结果淡入上滑、笔记列表 animateItem、章节选中态渐变、空态入场。
 - 数据页备份区 5 个动作合并为「立即备份 / 导出… / 导入恢复」。

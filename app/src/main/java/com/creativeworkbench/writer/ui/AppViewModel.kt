@@ -63,6 +63,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         assembleModules()
         // 启动抽检字数索引；漂移才全量重算，正常是空转。
         viewModelScope.launch {
+            // 推迟到首帧之后，别和打开章节抢磁盘
+            kotlinx.coroutines.delay(2500)
             runCatching { chapterRepository.auditWordCounts() }
         }
     }

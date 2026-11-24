@@ -1141,12 +1141,14 @@ private fun ActiveBlockEditor(
             override fun afterTextChanged(s: Editable?) {
                 if (suppress.get()) return
                 val inputAtNanos = android.os.SystemClock.elapsedRealtimeNanos()
-                // 输入到下一帧的耗时（不含输入法内部处理），用于 WB_PERF 复测。
-                editText.postOnAnimation {
-                    android.util.Log.i(
-                        "WB_PERF",
-                        "input_ms=" + ((android.os.SystemClock.elapsedRealtimeNanos() - inputAtNanos) / 1_000_000.0)
-                    )
+                // 输入到下一帧的耗时：只在 debug 打点；release 每敲一个字都写 logcat 会拖慢输入。
+                if (com.creativeworkbench.writer.BuildConfig.DEBUG) {
+                    editText.postOnAnimation {
+                        android.util.Log.i(
+                            "WB_PERF",
+                            "input_ms=" + ((android.os.SystemClock.elapsedRealtimeNanos() - inputAtNanos) / 1_000_000.0)
+                        )
+                    }
                 }
                 val text = s?.toString().orEmpty()
                 val newline = text.indexOf('\n')

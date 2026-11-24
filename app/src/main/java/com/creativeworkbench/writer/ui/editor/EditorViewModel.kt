@@ -75,11 +75,13 @@ class EditorViewModel(
                 is com.creativeworkbench.writer.core.data.OpenChapterResult.Ok -> {
                     val opened = loaded.opened
                     val total = refreshWordCounts(opened.content.blocks)
-                    android.util.Log.i(
-                        "WB_PERF",
-                        "load_ms=" + (android.os.SystemClock.elapsedRealtime() - openedAtMs) +
-                            " blocks=" + opened.content.blocks.size
-                    )
+                    if (com.creativeworkbench.writer.BuildConfig.DEBUG) {
+                        android.util.Log.i(
+                            "WB_PERF",
+                            "load_ms=" + (android.os.SystemClock.elapsedRealtime() - openedAtMs) +
+                                " blocks=" + opened.content.blocks.size
+                        )
+                    }
                     _state.value = EditorUiState(
                         workTitle = repository.work(opened.chapter.workId)?.title.orEmpty(),
                         chapterTitle = opened.chapter.title,
