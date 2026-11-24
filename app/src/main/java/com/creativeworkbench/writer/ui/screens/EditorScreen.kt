@@ -52,7 +52,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.creativeworkbench.writer.WorkbenchApp
 import com.creativeworkbench.writer.core.data.Block
+import com.creativeworkbench.writer.core.settings.FontSizePreset
 import com.creativeworkbench.writer.ui.editor.EditorViewModel
 import com.creativeworkbench.writer.ui.editor.EditorViewModelFactory
 import java.util.concurrent.atomic.AtomicBoolean
@@ -66,6 +68,18 @@ fun EditorScreen(
     onOpenDirectory: () -> Unit
 ) {
     val application = LocalContext.current.applicationContext as Application
+    val app = application as WorkbenchApp
+    val settings by app.container.settings.settings.collectAsStateWithLifecycle()
+    val bodySize = when (settings.fontSize) {
+        FontSizePreset.Small -> 15f
+        FontSizePreset.Standard -> 17f
+        FontSizePreset.Large -> 19f
+    }
+    val lineHeight = when (settings.fontSize) {
+        FontSizePreset.Small -> 27f
+        FontSizePreset.Standard -> 31f
+        FontSizePreset.Large -> 35f
+    }
     val viewModel: EditorViewModel = viewModel(
         key = "editor-" + chapterId,
         factory = EditorViewModelFactory(application, chapterId)
@@ -137,7 +151,9 @@ fun EditorScreen(
                             onMoveUp = { viewModel.move(block.id, -1) },
                             onMoveDown = { viewModel.move(block.id, 1) },
                             onInsertAfter = { viewModel.insertAfter(block.id) },
-                            onDelete = { viewModel.remove(block.id) }
+                            onDelete = { viewModel.remove(block.id) },
+                            textSizeSp = bodySize,
+                            lineHeightSp = lineHeight
                         )
                     }
                     item {
@@ -165,7 +181,9 @@ private fun BlockRow(
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
     onInsertAfter: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    textSizeSp: Float,
+    lineHeightSp: Float
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
@@ -203,6 +221,8 @@ private fun BlockRow(
                 onTextChange = onTextChange,
                 onSplitAt = onSplitAt,
                 onMergePrevious = onMergePrevious,
+                textSizeSp = textSizeSp,
+                lineHeightSp = lineHeightSp,
                 modifier = Modifier.weight(1f)
             )
         } else {
@@ -223,6 +243,8 @@ private fun ActiveBlockEditor(
     onTextChange: (String) -> Unit,
     onSplitAt: (Int) -> Unit,
     onMergePrevious: () -> Unit,
+    textSizeSp: Float,
+    lineHeightSp: Float,
     modifier: Modifier
 ) {
     val context = LocalContext.current
@@ -232,14 +254,14 @@ private fun ActiveBlockEditor(
     val currentOnMergePrevious by rememberUpdatedState(onMergePrevious)
     val suppress = remember { AtomicBoolean(false) }
 
-    val editText = remember(block.id) {
+    val editText = remember(block.id, textSizeSp, lineHeightSp) {
         EditText(context).apply {
             setBackgroundColor(AndroidColor.TRANSPARENT)
             setPadding(0, 0, 0, 0)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
-            setLineSpacing(0f, 1.18f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp)
+            setLineSpacing(0f, lineHeightSp / textSizeSp)
             gravity = Gravity.TOP or Gravity.START
             isVerticalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
