@@ -173,6 +173,7 @@ fun EditorScreen(
     val aiState by aiViewModel.state.collectAsStateWithLifecycle()
     var aiOpen by remember { mutableStateOf(false) }
     var pendingSelection by remember { mutableStateOf<SelectionInfo?>(null) }
+    val composedAtMs = remember { android.os.SystemClock.elapsedRealtime() }
     val listState = rememberLazyListState()
     val density = LocalDensity.current
     val keyboard = LocalSoftwareKeyboardController.current
@@ -200,6 +201,14 @@ fun EditorScreen(
                 if (index >= 0) listState.scrollToItem(index, offset)
             }
             restoredPosition = true
+        }
+    }
+    LaunchedEffect(state.loading) {
+        if (!state.loading) {
+            android.util.Log.i(
+                "WB_PERF",
+                "content_ms=" + (android.os.SystemClock.elapsedRealtime() - composedAtMs)
+            )
         }
     }
     LaunchedEffect(state.chapterNote) {

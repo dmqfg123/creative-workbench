@@ -361,7 +361,10 @@ class ChapterRepository(
         writeMutex.withLock {
             val chapters = db.chapterDao().listByWork(workId)
             db.workDao().delete(workId)
-            chapters.forEach { files.delete(it.id) }
+            chapters.forEach { chapter ->
+                files.delete(chapter.id)
+                files.deleteSnapshots(chapter.id)
+            }
         }
     }
 

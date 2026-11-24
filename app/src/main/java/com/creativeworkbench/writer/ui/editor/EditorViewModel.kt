@@ -56,6 +56,8 @@ class EditorViewModel(
     private var editVersion = 0L
     private var dirtySince = 0L
 
+    private val openedAtMs = android.os.SystemClock.elapsedRealtime()
+
     init {
         load()
     }
@@ -73,6 +75,11 @@ class EditorViewModel(
                 is com.creativeworkbench.writer.core.data.OpenChapterResult.Ok -> {
                     val opened = loaded.opened
                     val total = refreshWordCounts(opened.content.blocks)
+                    android.util.Log.i(
+                        "WB_PERF",
+                        "load_ms=" + (android.os.SystemClock.elapsedRealtime() - openedAtMs) +
+                            " blocks=" + opened.content.blocks.size
+                    )
                     _state.value = EditorUiState(
                         workTitle = repository.work(opened.chapter.workId)?.title.orEmpty(),
                         chapterTitle = opened.chapter.title,
