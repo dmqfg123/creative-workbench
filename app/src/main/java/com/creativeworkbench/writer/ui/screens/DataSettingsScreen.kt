@@ -79,6 +79,7 @@ fun DataSettingsScreen(onBack: () -> Unit) {
     var includeKey by remember { mutableStateOf(false) }
     var confirmIncludeKey by remember { mutableStateOf(false) }
     var pendingImport by remember { mutableStateOf<BackupBundle?>(null) }
+    var pendingPlugins by remember { mutableStateOf<Map<String, ByteArray>>(emptyMap()) }
 
     LaunchedEffect(Unit) {
         works = container.database.workDao().observeAll().first()
@@ -110,17 +111,30 @@ fun DataSettingsScreen(onBack: () -> Unit) {
         }
     }
 
+    val zipExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val result = backup.exportBundleZip(uri)
+                val message = if (result.isSuccess) "迁移包已导出" else "导出失败：" + result.exceptionOrNull()?.message
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
             scope.launch {
-                val (bundle, error) = backup.readBundle(uri)
-                if (bundle == null) {
-                    Toast.makeText(context, error ?: "读取失败", Toast.LENGTH_LONG).show()
+                val imported = backup.readBackupFile(uri)
+                if (imported.bundle == null) {
+                    Toast.makeText(context, imported.error ?: "读取失败", Toast.LENGTH_LONG).show()
                 } else {
                     // 先让用户看清要导入多少，再整包替换
-                    pendingImport = bundle
+                    pendingPlugins = imported.plugins
+                    pendingImport = imported.bundle
                 }
             }
         }
@@ -236,9 +250,12 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                     scope.launch {
                         when (val result = backup.importReplace(target)) {
                             is ImportResult.Ok -> {
+                                val pluginCount = backup.applyImportedPlugins(pendingPlugins)
+                                pendingPlugins = emptyMap()
                                 Toast.makeText(
                                     context,
-                                    "已恢复 " + result.preview.works + " 部作品 / " + result.preview.notes + " 条笔记",
+                                    "已恢复 " + result.preview.works + " 部作品 / " + result.preview.notes + " 条笔记" +
+                                        if (pluginCount > 0) " · 动作包 " + pluginCount + " 个文件" else "",
                                     Toast.LENGTH_LONG
                                 ).show()
                                 works = container.database.workDao().observeAll().first()
@@ -349,8 +366,12 @@ fun DataSettingsScreen(onBack: () -> Unit) {
             SectionLabel("备份")
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 PillButton(text = "导出全量备份", onClick = { exportLauncher.launch("雨刮模拟器备份.json.gz") })
-                GhostButton(text = "导入恢复", onClick = { importLauncher.launch(arrayOf("application/gzip", "application/json", "application/octet-stream")) })
+                GhostButton(text = "导入恢复", onClick = { importLauncher.launch(arrayOf("application/zip", "application/gzip", "application/json", "application/octet-stream")) })
             }
+            Spacer(Modifier.height(8.dp))
+            GhostButton(text = "导出整机迁移包（含动作包）", onClick = {
+                zipExportLauncher.launch("雨刮模拟器-迁移包.zip")
+            })
             Spacer(Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),

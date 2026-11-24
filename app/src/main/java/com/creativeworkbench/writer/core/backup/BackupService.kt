@@ -53,6 +53,8 @@ class BackupService(
     private val json = Json {
         ignoreUnknownKeys = true
         prettyPrint = false
+        // schemaVersion / apiKey 这类默认值也要显式写出来，方便以后按版本迁移
+        encodeDefaults = true
     }
 
     suspend fun buildBundle(includeApiKey: Boolean = false): BackupBundle = withContext(Dispatchers.IO) {
@@ -94,6 +96,104 @@ class BackupService(
                 }
             }
             text.length
+        }
+    }
+
+    /** 整机迁移包：manifest + backup.json + plugins/。 */
+    suspend fun exportBundleZip(uri: Uri): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            val bundle = buildBundle(includeApiKey = false)
+            val backupJson = json.encodeToString(BackupBundle.serializer(), bundle)
+            val plugins = readPluginFiles()
+            val manifest = mapOf(
+                "format" to "workbench-migration",
+                "schemaVersion" to SCHEMA_VERSION.toString(),
+                "appVersion" to com.creativeworkbench.writer.BuildConfig.VERSION_NAME,
+                "exportedAt" to System.currentTimeMillis().toString(),
+                "works" to bundle.works.size.toString(),
+                "chapters" to bundle.chapters.size.toString(),
+                "notes" to bundle.notes.size.toString(),
+                "plugins" to plugins.size.toString()
+            )
+            val out = context.contentResolver.openOutputStream(uri) ?: error("无法写入文件")
+            out.use { BackupZip.write(it, backupJson, plugins, manifest) }
+            backupJson.length + plugins.values.sumOf { it.size }
+        }
+    }
+
+    private fun readPluginFiles(): Map<String, ByteArray> {
+        val rootDir = File(context.filesDir, "workbench/plugins")
+        if (!rootDir.exists()) return emptyMap()
+        val result = mutableMapOf<String, ByteArray>()
+        var total = 0L
+        rootDir.walkTopDown().filter { it.isFile }.forEach { file ->
+            val relative = file.relativeTo(rootDir).path.replace('\\', '/')
+            if (result.size >= 500) return@forEach
+            val bytes = runCatching { file.readBytes() }.getOrNull() ?: return@forEach
+            if (bytes.size > 512 * 1024) return@forEach
+            total += bytes.size
+            if (total > 16L * 1024 * 1024) return@forEach
+            result[relative] = bytes
+        }
+        return result
+    }
+
+    /** 恢复迁移包里的动作包文件；返回写入的文件数。 */
+    suspend fun applyImportedPlugins(plugins: Map<String, ByteArray>): Int = withContext(Dispatchers.IO) {
+        if (plugins.isEmpty()) return@withContext 0
+        val rootDir = File(context.filesDir, "workbench/plugins")
+        var written = 0
+        plugins.forEach { (name, bytes) ->
+            if (name.isBlank() || name.contains("..") || name.startsWith("/")) return@forEach
+            val target = File(rootDir, name)
+            target.parentFile?.mkdirs()
+            runCatching { target.writeBytes(bytes) }.onSuccess { written++ }
+        }
+        written
+    }
+
+    data class ImportedBackup(
+        val bundle: BackupBundle?,
+        val error: String?,
+        val plugins: Map<String, ByteArray> = emptyMap()
+    )
+
+    /** 兼容三种文件：整机迁移包 .zip、gzip 备份、纯 JSON。 */
+    suspend fun readBackupFile(uri: Uri): ImportedBackup = withContext(Dispatchers.IO) {
+        runCatching {
+            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: return@runCatching ImportedBackup(null, "无法读取文件")
+            if (BackupZip.isZip(bytes)) {
+                val content = BackupZip.read(bytes.inputStream())
+                if (content.error != null) {
+                    ImportedBackup(null, content.error, content.plugins)
+                } else {
+                    val parsed = runCatching {
+                        json.decodeFromString(BackupBundle.serializer(), content.backupJson!!)
+                    }.getOrElse { error ->
+                        return@runCatching ImportedBackup(null, "备份解析失败：" + (error.message ?: ""))
+                    }
+                    if (parsed.schemaVersion > SCHEMA_VERSION) {
+                        ImportedBackup(null, "备份版本比当前 App 新（" + parsed.schemaVersion + "），请先升级 App")
+                    } else {
+                        ImportedBackup(parsed, null, content.plugins)
+                    }
+                }
+            } else {
+                val text = if (bytes.size > 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte()) {
+                    GZIPInputStream(bytes.inputStream()).use { it.readBytes() }.toString(Charsets.UTF_8)
+                } else {
+                    bytes.toString(Charsets.UTF_8)
+                }
+                val bundle = json.decodeFromString(BackupBundle.serializer(), text)
+                if (bundle.schemaVersion > SCHEMA_VERSION) {
+                    ImportedBackup(null, "备份版本比当前 App 新（" + bundle.schemaVersion + "），请先升级 App")
+                } else {
+                    ImportedBackup(bundle, null)
+                }
+            }
+        }.getOrElse { error ->
+            ImportedBackup(null, "文件解析失败：" + (error.message ?: "格式不对"))
         }
     }
 

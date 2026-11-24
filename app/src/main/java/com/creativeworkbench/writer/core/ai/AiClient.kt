@@ -21,6 +21,17 @@ data class AiUsage(
 ) {
     val hasCacheInfo: Boolean get() = cacheHitTokens > 0 || cacheMissTokens > 0
     val totalTokens: Int get() = promptTokens + completionTokens
+
+    /** 缓存命中率（按输入 tokens 算）。 */
+    val cacheHitRate: Double
+        get() = if (promptTokens <= 0) 0.0 else cacheHitTokens.toDouble() / promptTokens
+
+    /**
+     * 按 DeepSeek 公开价目估算本次花费（元）：
+     * 缓存命中 0.1 / 未命中 1 / 输出 2 元每百万 tokens。价格会变，只作参考。
+     */
+    fun estimatedCostCny(): Double =
+        (cacheMissTokens * 1.0 + cacheHitTokens * 0.1 + completionTokens * 2.0) / 1_000_000.0
 }
 
 sealed interface AiCallResult {

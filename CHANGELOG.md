@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## 0.8.0（2026-11-24）整机迁移包 zip + 缓存命中花费
+
+本轮先看外部资料（见 参考/外部资料与代码拆解_20261124.md）：DeepSeek 缓存文档、Notally / Quillpad 的备份实现。
+
+- **整机迁移包 .zip**：数据页新增「导出整机迁移包（含动作包）」，包内是 `manifest.json`（format/schemaVersion/appVersion/导出数量）+ `backup.json` + `plugins/…`。导入恢复现在同时认 `.zip` / `.json.gz` / `.json`；zip 里的动作包会一并恢复（导入后 Toast 报文件数）。
+- **导入确认框照旧**先显示「将导入 N 部作品 / N 章 / N 条笔记 / N 条调用历史」，确认后才整包替换。
+- **缓存命中与花费**：AI 面板的结果区显示「prompt 12340（缓存命中 11800，95%）· 输出 480 · 约 ¥0.0021」；估价按 DeepSeek 价目（命中 0.1 / 未命中 1 / 输出 2 元每百万 tokens），只作参考。
+- **修一个漏洞**：备份 JSON 之前没写 `schemaVersion`（默认值不序列化），现在显式写出，将来加迁移逻辑才有依据；`apiKey` 也显式写成 null。
+- 单测 67 条通过（新增 BackupZip 4 条、AiUsage 花费 1 条）。
+- 真机实测：导出迁移包 → 系统保存到 Download（2.1 KB，含 manifest + backup.json，无 apiKey）→ 重新导入 → 确认框报「1 部作品 / 1 章 / 3 条笔记 / 5 条调用历史」→ 导入成功。
+
 ## 0.7.0（2026-11-24）预算整段淘汰、JSON 容错、usage 记账
 
 接着 dsh-Go 源码拆解（参考/开源项目拆解_dshGo_20261124.md）落了三条：

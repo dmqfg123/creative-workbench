@@ -264,8 +264,10 @@ fun AiPanel(
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "本次 tokens：prompt " + usage.promptTokens +
-                        (if (usage.hasCacheInfo) "（缓存命中 " + usage.cacheHitTokens + "）" else "") +
-                        " · 输出 " + usage.completionTokens,
+                        (if (usage.hasCacheInfo) "（缓存命中 " + usage.cacheHitTokens +
+                            "，" + (usage.cacheHitRate * 100).toInt() + "%）" else "") +
+                        " · 输出 " + usage.completionTokens +
+                        " · 约 ¥" + String.format(java.util.Locale.US, "%.4f", usage.estimatedCostCny()),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
