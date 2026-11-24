@@ -57,18 +57,27 @@ class EditorViewModel(
 
     private fun load() {
         viewModelScope.launch {
-            val opened = repository.openChapter(chapterId)
-            if (opened == null) {
-                _state.value = EditorUiState(loading = false, error = "章节不存在")
-                return@launch
+            when (val result = repository.openChapterResult(chapterId)) {
+                is com.creativeworkbench.writer.core.data.OpenChapterResult.Ok -> {
+                    val opened = result.opened
+                    _state.value = EditorUiState(
+                        chapterTitle = opened.chapter.title,
+                        blocks = opened.content.blocks,
+                        revision = opened.chapter.revision,
+                        wordCount = repository.countWords(opened.content.blocks),
+                        loading = false
+                    )
+                }
+                com.creativeworkbench.writer.core.data.OpenChapterResult.Missing -> {
+                    _state.value = EditorUiState(loading = false, error = "章节不存在")
+                }
+                is com.creativeworkbench.writer.core.data.OpenChapterResult.Corrupt -> {
+                    _state.value = EditorUiState(
+                        loading = false,
+                        error = "章节文件损坏，已停止编辑；请从备份恢复。"
+                    )
+                }
             }
-            _state.value = EditorUiState(
-                chapterTitle = opened.chapter.title,
-                blocks = opened.content.blocks,
-                revision = opened.chapter.revision,
-                wordCount = repository.countWords(opened.content.blocks),
-                loading = false
-            )
         }
     }
 
@@ -91,7 +100,8 @@ class EditorViewModel(
             )
         }
         editVersion++
-        markDirty(blockId, text)
+        val updated = blocks.firstOrNull { it.id == blockId }
+        if (updated != null) markDirty(listOf(updated))
     }
 
     fun splitBlock(blockId: String, charOffset: Int) {
@@ -147,7 +157,7 @@ class EditorViewModel(
             )
         }
         editVersion++
-        markDirty(entry.before.firstOrNull()?.id ?: "", entry.before.firstOrNull()?.text ?: "")
+        markDirty(entry.before)
     }
 
     fun redo() {
@@ -165,7 +175,7 @@ class EditorViewModel(
             )
         }
         editVersion++
-        markDirty(entry.after.firstOrNull()?.id ?: "", entry.after.firstOrNull()?.text ?: "")
+        markDirty(entry.after)
     }
 
     fun flush() {
@@ -194,16 +204,15 @@ class EditorViewModel(
             )
         }
         editVersion++
-        val first = entry.after.firstOrNull()
-        markDirty(first?.id ?: "", first?.text ?: "")
+        markDirty(entry.after)
     }
 
-    private fun markDirty(blockId: String, text: String) {
+    private fun markDirty(blocks: List<Block>) {
         if (dirtySince == 0L) dirtySince = System.currentTimeMillis()
         journalJob?.cancel()
         journalJob = viewModelScope.launch {
             delay(250)
-            if (blockId.isNotEmpty()) repository.appendJournal(chapterId, blockId, text)
+            repository.appendJournalBlocks(chapterId, blocks)
         }
         saveJob?.cancel()
         saveJob = viewModelScope.launch {

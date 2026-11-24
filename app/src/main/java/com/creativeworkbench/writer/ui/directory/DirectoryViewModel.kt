@@ -62,6 +62,13 @@ class DirectoryViewModel(
             _messages.emit("章节已删除")
         }
     }
+
+    fun updateSummary(chapterId: String, summary: String) {
+        viewModelScope.launch {
+            repository.updateSummary(chapterId, summary)
+            _messages.emit("摘要已保存")
+        }
+    }
 }
 
 class DirectoryViewModelFactory(

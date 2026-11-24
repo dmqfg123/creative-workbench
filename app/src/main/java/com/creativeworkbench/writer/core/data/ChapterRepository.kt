@@ -19,6 +19,12 @@ sealed interface SaveResult {
     data object NotFound : SaveResult
 }
 
+sealed interface OpenChapterResult {
+    data class Ok(val opened: OpenedChapter) : OpenChapterResult
+    data object Missing : OpenChapterResult
+    data class Corrupt(val detail: String) : OpenChapterResult
+}
+
 class ChapterRepository(
     private val db: WorkbenchDatabase,
     private val files: ChapterFileStore
@@ -100,14 +106,18 @@ class ChapterRepository(
         }
     }
 
-    suspend fun openChapter(chapterId: String): OpenedChapter? = withContext(Dispatchers.IO) {
+    suspend fun openChapter(chapterId: String): OpenedChapter? =
+        (openChapterResult(chapterId) as? OpenChapterResult.Ok)?.opened
+
+    suspend fun openChapterResult(chapterId: String): OpenChapterResult = withContext(Dispatchers.IO) {
         writeMutex.withLock {
-            var chapter = db.chapterDao().byId(chapterId) ?: return@withLock null
+            var chapter = db.chapterDao().byId(chapterId)
+                ?: return@withLock OpenChapterResult.Missing
             var content = try {
                 files.read(chapterId)
             } catch (error: Exception) {
                 // 文件损坏时不要用空章节覆盖；交给上层提示/导出备份。
-                return@withLock null
+                return@withLock OpenChapterResult.Corrupt(error.message ?: "章节文件无法解析")
             }
             if (content == null) {
                 content = ChapterContent(
@@ -133,7 +143,7 @@ class ChapterRepository(
                 db.chapterDao().update(chapter)
                 files.clearJournal(chapterId)
             }
-            OpenedChapter(chapter, content)
+            OpenChapterResult.Ok(OpenedChapter(chapter, content))
         }
     }
 
@@ -175,14 +185,22 @@ class ChapterRepository(
     }
 
     suspend fun appendJournal(chapterId: String, blockId: String, text: String) {
-        val record = JournalRecord(
-            seq = journalSeq.incrementAndGet(),
-            blockId = blockId,
-            text = text,
-            crc32 = files.crc32(text),
-            ts = System.currentTimeMillis()
-        )
-        files.appendJournal(chapterId, record)
+        appendJournalBlocks(chapterId, listOf(Block(blockId, text)))
+    }
+
+    suspend fun appendJournalBlocks(chapterId: String, blocks: List<Block>) {
+        if (blocks.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val records = blocks.map { block ->
+            JournalRecord(
+                seq = journalSeq.incrementAndGet(),
+                blockId = block.id,
+                text = block.text,
+                crc32 = files.crc32(block.text),
+                ts = now
+            )
+        }
+        files.appendJournalBatch(chapterId, records)
     }
 
     suspend fun renameWork(workId: String, title: String) = withContext(Dispatchers.IO) {
@@ -237,6 +255,16 @@ class ChapterRepository(
     suspend fun renameChapter(chapterId: String, title: String) = withContext(Dispatchers.IO) {
         val chapter = db.chapterDao().byId(chapterId) ?: return@withContext
         db.chapterDao().update(chapter.copy(title = title.trim(), updatedAt = System.currentTimeMillis()))
+    }
+
+    suspend fun updateSummary(chapterId: String, summary: String?) = withContext(Dispatchers.IO) {
+        val chapter = db.chapterDao().byId(chapterId) ?: return@withContext
+        db.chapterDao().update(
+            chapter.copy(
+                summary = summary?.trim()?.takeIf { it.isNotEmpty() },
+                updatedAt = System.currentTimeMillis()
+            )
+        )
     }
 
     suspend fun deleteWork(workId: String) = withContext(Dispatchers.IO) {

@@ -67,8 +67,13 @@ class ChapterFileStore(context: Context) {
     }
 
     fun appendJournal(chapterId: String, record: JournalRecord) {
-        val line = json.encodeToString(record) + "\n"
-        val bytes = line.toByteArray(Charsets.UTF_8)
+        appendJournalBatch(chapterId, listOf(record))
+    }
+
+    fun appendJournalBatch(chapterId: String, records: List<JournalRecord>) {
+        if (records.isEmpty()) return
+        val text = records.joinToString(separator = "") { json.encodeToString(it) + "\n" }
+        val bytes = text.toByteArray(Charsets.UTF_8)
         FileOutputStream(journalFile(chapterId), true).use { out ->
             out.write(bytes)
             out.flush()

@@ -64,6 +64,7 @@ fun DirectoryScreen(
     val snackbar = remember { SnackbarHostState() }
     var showAdd by remember { mutableStateOf(false) }
     var renameChapter by remember { mutableStateOf<ChapterEntity?>(null) }
+    var summaryChapter by remember { mutableStateOf<ChapterEntity?>(null) }
     var deleteChapter by remember { mutableStateOf<ChapterEntity?>(null) }
 
     LaunchedEffect(Unit) {
@@ -89,6 +90,16 @@ fun DirectoryScreen(
             onConfirm = {
                 viewModel.renameChapter(chapter.id, it)
                 renameChapter = null
+            }
+        )
+    }
+    summaryChapter?.let { chapter ->
+        SummaryDialog(
+            chapter = chapter,
+            onDismiss = { summaryChapter = null },
+            onConfirm = {
+                viewModel.updateSummary(chapter.id, it)
+                summaryChapter = null
             }
         )
     }
@@ -143,6 +154,7 @@ fun DirectoryScreen(
                         chapter = chapter,
                         onClick = { onOpenChapter(chapter.id) },
                         onRename = { renameChapter = chapter },
+                        onSummary = { summaryChapter = chapter },
                         onDelete = { deleteChapter = chapter }
                     )
                 }
@@ -157,6 +169,7 @@ private fun ChapterRow(
     chapter: ChapterEntity,
     onClick: () -> Unit,
     onRename: () -> Unit,
+    onSummary: () -> Unit,
     onDelete: () -> Unit
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -179,6 +192,14 @@ private fun ChapterRow(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                chapter.summary?.takeIf { it.isNotBlank() }?.let { summary ->
+                    Text(
+                        summary,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
             }
             Box {
                 TextButton(onClick = { menu = true }) { Text("…") }
@@ -188,6 +209,10 @@ private fun ChapterRow(
                         onClick = { menu = false; onRename() }
                     )
                     DropdownMenuItem(
+                        text = { Text("编辑摘要") },
+                        onClick = { menu = false; onSummary() }
+                    )
+                    DropdownMenuItem(
                         text = { Text("删除") },
                         onClick = { menu = false; onDelete() }
                     )
@@ -195,6 +220,43 @@ private fun ChapterRow(
             }
         }
     }
+}
+
+@Composable
+private fun SummaryDialog(
+    chapter: ChapterEntity,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var value by remember { mutableStateOf(chapter.summary.orEmpty()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("章节摘要") },
+        text = {
+            Column {
+                Text(
+                    "100–200 字，用于 AI 最近 10 章上下文；不写也能用。",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it.take(200) },
+                    minLines = 3,
+                    maxLines = 6,
+                    modifier = Modifier.fillMaxWidth(),
+                    supportingText = { Text(value.length.toString() + "/200") }
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(value) }) { Text("保存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
 }
 
 @Composable
