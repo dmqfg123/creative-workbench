@@ -35,6 +35,14 @@ class PluginStore(private val context: Context) {
     fun findAction(actionId: String): AiActionSpec? =
         list().flatMap { it.actions }.firstOrNull { it.id == actionId }
 
+    /** 读动作自己的提示词（prompts 目录下的 md）。 */
+    fun promptFor(action: AiActionSpec): String? {
+        val packId = action.packId ?: return null
+        val file = File(File(root, packId), action.promptFile)
+        if (!file.exists()) return null
+        return runCatching { file.readText().trim() }.getOrNull()?.takeIf { it.isNotEmpty() }
+    }
+
     fun delete(id: String) {
         root.listFiles()?.firstOrNull { it.name == id }?.deleteRecursively()
     }
@@ -98,7 +106,11 @@ class PluginStore(private val context: Context) {
                     val actionFiles = json.optJSONArray("actions") ?: org.json.JSONArray()
                     if (actionFiles.length() == 0) errors.add("manifest.actions 为空")
                     val builtinIds = AiActions.builtin.map { it.id }.toSet()
-                    val existingIds = list().flatMap { pack -> pack.actions.map { it.id } }.toSet()
+                    // 同名包重复导入视为覆盖，不算动作 id 冲突。
+                    val existingIds = list()
+                        .filter { it.id != id }
+                        .flatMap { pack -> pack.actions.map { it.id } }
+                        .toSet()
                     val actions = mutableListOf<AiActionSpec>()
                     for (index in 0 until actionFiles.length()) {
                         val relative = actionFiles.optString(index)
@@ -132,7 +144,8 @@ class PluginStore(private val context: Context) {
                                 write = write,
                                 whenCondition = ActionWhen.Always,
                                 priority = actionJson.optInt("priority", 0),
-                                source = ActionSource.Imported
+                                source = ActionSource.Imported,
+                                packId = id
                             )
                         )
                     }
@@ -167,7 +180,8 @@ class PluginStore(private val context: Context) {
                     write = runCatching { WriteTarget.valueOf(actionJson.optString("write")) }.getOrDefault(WriteTarget.None),
                     whenCondition = ActionWhen.Always,
                     priority = actionJson.optInt("priority", 0),
-                    source = ActionSource.Imported
+                    source = ActionSource.Imported,
+                    packId = dir.name
                 )
             }.getOrNull()
         }

@@ -117,6 +117,7 @@ import com.creativeworkbench.writer.core.data.NoteKind
 import com.creativeworkbench.writer.core.settings.FontSizePreset
 import com.creativeworkbench.writer.core.ai.AiActions
 import com.creativeworkbench.writer.core.ai.SelectionInfo
+import com.creativeworkbench.writer.core.ai.WriteTarget
 import com.creativeworkbench.writer.ui.ai.AiPanel
 import com.creativeworkbench.writer.ui.ai.AiViewModel
 import com.creativeworkbench.writer.ui.ai.AiViewModelFactory
@@ -570,7 +571,7 @@ fun EditorScreen(
             },
             onWrite = { text ->
                 val action = aiState.action
-                if (action?.id == AiActions.REWRITE) {
+                if (action?.write == WriteTarget.BodyReplaceSelection) {
                     pendingSelection?.let { selection ->
                         val ok = viewModel.applyAiRewrite(
                             selection.blockId,

@@ -85,8 +85,16 @@ class AiViewModel(
         }
         _state.value = _state.value.copy(action = action, overflow = null, error = null, resultText = "", issues = emptyList())
         viewModelScope.launch {
+            val promptOverride = if (action.source == com.creativeworkbench.writer.core.ai.ActionSource.Imported) {
+                container.plugins.promptFor(action)
+            } else {
+                null
+            }
             val prepared = runCatching {
-                builder.prepare(action, config, workId, chapterId, blocks, activeBlockId, selection, allowOverflow)
+                builder.prepare(
+                    action, config, workId, chapterId, blocks, activeBlockId, selection, allowOverflow,
+                    instructionOverride = promptOverride
+                )
             }.getOrElse { error ->
                 _state.value = _state.value.copy(error = "上下文装配失败：" + (error.message ?: "未知错误"))
                 return@launch

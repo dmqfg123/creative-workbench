@@ -45,7 +45,8 @@ class AiContextBuilder(
         blocks: List<Block>,
         activeBlockId: String?,
         selection: SelectionInfo?,
-        allowSettingOverflow: Boolean
+        allowSettingOverflow: Boolean,
+        instructionOverride: String? = null
     ): PreparedContext {
         val chapterList = chapters.chapters(workId)
         val allNotes = noteRepository.observeAll().first()
@@ -159,7 +160,7 @@ class AiContextBuilder(
                 appendLine(selection.text)
             }
             appendLine("【任务】")
-            append(actionInstruction(action, selection))
+            append(instructionOverride?.takeIf { it.isNotBlank() } ?: actionInstruction(action, selection))
         }
 
         val settingChars = settingText.length

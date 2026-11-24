@@ -17,7 +17,8 @@ data class AiActionSpec(
     val write: WriteTarget,
     val whenCondition: ActionWhen,
     val priority: Int,
-    val source: ActionSource = ActionSource.Builtin
+    val source: ActionSource = ActionSource.Builtin,
+    val packId: String? = null
 )
 
 data class AiConfig(

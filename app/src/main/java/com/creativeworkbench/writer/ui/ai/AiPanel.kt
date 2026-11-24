@@ -258,11 +258,13 @@ fun AiPanel(
                 if (state.resultText.isNotBlank() && !state.generating) {
                     GhostButton(text = "重新生成", onClick = onGenerate)
                     GhostButton(text = "复制", onClick = { clipboard.setText(AnnotatedString(state.resultText)) })
-                    if (action?.id == AiActions.CONTINUE || action?.id == AiActions.REWRITE) {
+                    val write = action?.write
+                    if (write != null && write != com.creativeworkbench.writer.core.ai.WriteTarget.None) {
+                        val replaces = write == com.creativeworkbench.writer.core.ai.WriteTarget.BodyReplaceSelection
                         PillButton(
-                            text = if (action.id == AiActions.CONTINUE) "写入正文" else "替换选区",
+                            text = if (replaces) "替换选区" else "写入正文",
                             onClick = { confirmWrite = true },
-                            enabled = if (action.id == AiActions.REWRITE) selection != null else hasActiveBlock
+                            enabled = if (replaces) selection != null else hasActiveBlock
                         )
                     }
                 }
