@@ -22,10 +22,12 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 data class EditorUiState(
+    val workTitle: String = "",
     val chapterTitle: String = "",
     val blocks: List<Block> = emptyList(),
     val revision: Long = 0L,
     val activeBlockId: String? = null,
+    val cursorOffset: Int = 0,
     val wordCount: Long = 0L,
     val dirty: Boolean = false,
     val saving: Boolean = false,
@@ -70,6 +72,7 @@ class EditorViewModel(
                     val opened = loaded.opened
                     val total = refreshWordCounts(opened.content.blocks)
                     _state.value = EditorUiState(
+                        workTitle = repository.work(opened.chapter.workId)?.title.orEmpty(),
                         chapterTitle = opened.chapter.title,
                         blocks = opened.content.blocks,
                         revision = opened.chapter.revision,
@@ -90,8 +93,13 @@ class EditorViewModel(
         }
     }
 
-    fun activate(blockId: String) {
-        _state.update { it.copy(activeBlockId = blockId) }
+    fun activate(blockId: String, cursorOffset: Int = 0) {
+        _state.update {
+            it.copy(
+                activeBlockId = blockId,
+                cursorOffset = cursorOffset.coerceAtLeast(0)
+            )
+        }
     }
 
     fun deactivate() {
@@ -123,15 +131,16 @@ class EditorViewModel(
         val codePointOffset = block.text.codePointCount(0, charOffset.coerceIn(0, block.text.length))
         val newId = UUID.randomUUID().toString()
         apply(EditCommand.Split(blockId, codePointOffset, newId))
-        _state.update { it.copy(activeBlockId = newId) }
+        _state.update { it.copy(activeBlockId = newId, cursorOffset = 0) }
     }
 
     fun mergeWithPrevious(blockId: String) {
         val index = _state.value.blocks.indexOfFirst { it.id == blockId }
         if (index <= 0) return
         val upper = _state.value.blocks[index - 1]
+        val joinOffset = upper.text.length
         apply(EditCommand.Merge(upper.id, blockId))
-        _state.update { it.copy(activeBlockId = upper.id) }
+        _state.update { it.copy(activeBlockId = upper.id, cursorOffset = joinOffset) }
     }
 
     fun move(blockId: String, delta: Int) {
@@ -146,14 +155,14 @@ class EditorViewModel(
         if (index < 0) return
         val nextActive = blocks.getOrNull(index + 1)?.id ?: blocks.getOrNull(index - 1)?.id
         apply(EditCommand.Remove(blockId))
-        _state.update { it.copy(activeBlockId = nextActive) }
+        _state.update { it.copy(activeBlockId = nextActive, cursorOffset = 0) }
     }
 
     fun insertAfter(blockId: String) {
         val index = _state.value.blocks.indexOfFirst { it.id == blockId }
         val newBlock = Block(UUID.randomUUID().toString(), "")
         apply(EditCommand.Insert(index + 1, newBlock))
-        _state.update { it.copy(activeBlockId = newBlock.id) }
+        _state.update { it.copy(activeBlockId = newBlock.id, cursorOffset = 0) }
     }
 
     fun undo() {
@@ -166,6 +175,7 @@ class EditorViewModel(
                 dirty = true,
                 activeBlockId = entry.before.firstOrNull { block -> block.id == it.activeBlockId }?.id
                     ?: entry.before.firstOrNull()?.id,
+                cursorOffset = 0,
                 undoAvailable = undoStack.isNotEmpty(),
                 redoAvailable = true
             )
@@ -184,6 +194,7 @@ class EditorViewModel(
                 dirty = true,
                 activeBlockId = entry.after.firstOrNull { block -> block.id == it.activeBlockId }?.id
                     ?: entry.after.firstOrNull()?.id,
+                cursorOffset = 0,
                 undoAvailable = true,
                 redoAvailable = redoStack.isNotEmpty()
             )

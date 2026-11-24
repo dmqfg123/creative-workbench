@@ -17,12 +17,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -39,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -51,6 +52,7 @@ import com.creativeworkbench.writer.ui.directory.DirectoryViewModelFactory
 @Composable
 fun DirectoryScreen(
     workId: String,
+    currentChapterId: String?,
     onOpenChapter: (String) -> Unit,
     onBack: () -> Unit
 ) {
@@ -129,29 +131,57 @@ fun DirectoryScreen(
                     TextButton(onClick = onBack) { Text("返回") }
                 }
             )
-        },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                text = { Text("新章节") },
-                icon = { Text("＋") },
-                onClick = { showAdd = true }
-            )
         }
     ) { padding ->
-        if (chapters.isEmpty()) {
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                Text("还没有章节", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        val continueChapter = chapters.firstOrNull { it.id == currentChapterId } ?: chapters.lastOrNull()
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                ) {
+                    Column(Modifier.padding(20.dp)) {
+                        Text(
+                            work?.title ?: "作品目录",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            chapters.size.toString() + " 章 · " + (work?.wordCount ?: 0L) + " 字",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Spacer(Modifier.height(14.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Button(
+                                enabled = continueChapter != null,
+                                onClick = { continueChapter?.let { onOpenChapter(it.id) } }
+                            ) { Text("继续写作") }
+                            TextButton(onClick = { showAdd = true }) { Text("新建章节") }
+                        }
+                    }
+                }
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 96.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
+            if (chapters.isEmpty()) {
+                item {
+                    Text(
+                        "还没有章节，点「新建章节」开始。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 32.dp)
+                    )
+                }
+            } else {
                 itemsIndexed(chapters, key = { _, chapter -> chapter.id }) { index, chapter ->
                     ChapterRow(
                         index = index,
                         chapter = chapter,
+                        selected = chapter.id == currentChapterId,
                         onClick = { onOpenChapter(chapter.id) },
                         onRename = { renameChapter = chapter },
                         onSummary = { summaryChapter = chapter },
@@ -167,6 +197,7 @@ fun DirectoryScreen(
 private fun ChapterRow(
     index: Int,
     chapter: ChapterEntity,
+    selected: Boolean,
     onClick: () -> Unit,
     onRename: () -> Unit,
     onSummary: () -> Unit,
@@ -176,7 +207,9 @@ private fun ChapterRow(
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+        )
     ) {
         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -186,7 +219,11 @@ private fun ChapterRow(
                 modifier = Modifier.width(30.dp)
             )
             Column(Modifier.weight(1f)) {
-                Text(chapter.title, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    chapter.title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                )
                 Text(
                     chapter.wordCount.toString() + " 字",
                     style = MaterialTheme.typography.labelSmall,

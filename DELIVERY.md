@@ -1,17 +1,17 @@
-# 阶段性交付说明（0.2.0）
+# 阶段性交付说明（0.2.1）
 
-> 日期：2026-11-24 ｜ 代码：E:\AIbendi\work\creative-workbench（tag v0.2.0-stage）｜ 文档：E:\AIbendi\文学创作平台项目
+> 日期：2026-11-24 ｜ 代码：E:\AIbendi\work\creative-workbench（tag v0.2.1-ux）｜ 文档：E:\AIbendi\文学创作平台项目
 > 状态：可构建、可安装的 S1-S3 原型；**未真机验证**。
 
 ## 1. 产物
 
 | 文件 | 大小 | SHA-256 |
 |---|---|---|
-| apk/app-debug.apk | 27,562,706 B | F64C4AA8B582E24F625DEC399A9609BAB740DD09E61C77B43D0D6906E9574E2B |
-| apk/app-release.apk | 20,824,701 B | 52B167AA2E80F4E89252C6A3829436397C48FA49D9715BBDFA470EFAEEA8FF72 |
+| apk/创作工作台_0.2.1_debug.apk | 27,611,858 B | EA6B2A0B4FD4D7075B5CC9D66BDD28EA3DC7C65A1B1FF3CC8010BC36BB79D822 |
+| apk/创作工作台_0.2.1_release.apk | 20,857,465 B | E45178363231C88E54E2C5CF3354AF39D01131E726DD6AF4058C8962A345C1C2 |
 
 - package：com.creativeworkbench.writer
-- versionCode 2 / versionName 0.2.0
+- versionCode 3 / versionName 0.2.1
 - minSdk 29 / targetSdk 34 / compileSdk 34
 - 两个 APK 目前都用项目内 debug keystore 签名（CN=Android Debug）；release 不是正式发布签名。
 
@@ -24,7 +24,10 @@
 - 文件 revision 领先 DB 时以文件为准修复 DB 与作品总字数；删除先 DB 后文件。
 - 损坏/保存失败不再用空章节覆盖，也不吞异常。
 
-### S2 编辑器原型
+### S2 编辑器原型（0.2.1 交互重做）
+- 文档感布局：顶部只留返回/作品名/章节名/⋯；底部工具条放撤销/重做/＋段/段落/收起。
+- 去掉每段「⋮」手柄与「点击编辑」提示；点正文任意位置按落点定位光标。
+- 章节标题在正文内，字数/保存状态在标题下；空文档只提示一次。
 - LazyColumn 分块 + 单个 EditText 活动段；其余段落只读。
 - 回车拆分：硬件键走 onKeyDown；软键盘走 TextWatcher 去掉 \n 并拆段。
 - 段首退格：OnKeyListener + InputConnectionWrapper（deleteSurroundingText / deleteSurroundingTextInCodePoints）双路径，菜单保留「合并到上一段」兜底。
@@ -33,6 +36,8 @@
 - 字号 15/27、17/31、19/35 生效。
 
 ### S3 书架与目录
+- 书架加「继续创作」大卡 + 顶部「＋ 新作品」。
+- 目录页加作品头卡（继续写作/新建章节）、当前章高亮；移除悬浮按钮。
 - 新建作品（只填书名）、删除确认、作品目录入口。
 - 目录页新建/改名/删除章节、章节摘要（100-200 字）、进入编辑器。
 - 编辑器「目录」入口，切换前 flush。

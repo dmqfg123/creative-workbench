@@ -109,6 +109,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setCurrentChapter(workId: String, chapterId: String) {
+        _appState.value = _appState.value.copy(currentWorkId = workId, currentChapterId = chapterId)
+    }
+
     fun deleteWork(workId: String) {
         viewModelScope.launch {
             try {

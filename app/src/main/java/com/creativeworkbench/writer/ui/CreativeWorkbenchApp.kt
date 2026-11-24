@@ -29,6 +29,7 @@ import com.creativeworkbench.writer.ui.theme.CreativeWorkbenchTheme
 @Composable
 fun CreativeWorkbenchApp(viewModel: AppViewModel) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val appState by viewModel.appState.collectAsStateWithLifecycle()
     val navController = rememberNavController()
     val snackbarHostState = remember { SnackbarHostState() }
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -89,7 +90,9 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                     val workId = entry.arguments?.getString("workId").orEmpty()
                     DirectoryScreen(
                         workId = workId,
+                        currentChapterId = appState.currentChapterId,
                         onOpenChapter = { chapterId ->
+                            viewModel.setCurrentChapter(workId, chapterId)
                             navController.navigate("editor/" + workId + "/" + chapterId)
                         },
                         onBack = { navController.popBackStack() }
