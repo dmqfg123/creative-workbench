@@ -15,6 +15,7 @@ import com.creativeworkbench.writer.core.ai.AiHistoryRecord
 import com.creativeworkbench.writer.core.ai.AiHistoryStore
 import com.creativeworkbench.writer.core.ai.AiIssue
 import com.creativeworkbench.writer.core.ai.AiIssueParser
+import com.creativeworkbench.writer.core.ai.AiOutputSanitizer
 import com.creativeworkbench.writer.core.ai.ChatMessage
 import com.creativeworkbench.writer.core.ai.ContextPreview
 import com.creativeworkbench.writer.core.ai.PreparedContext
@@ -123,6 +124,7 @@ class AiViewModel(
                     _state.value = _state.value.copy(generating = false, error = result.message)
                 }
                 is AiCallResult.Ok -> {
+                    val cleaned = AiOutputSanitizer.clean(result.content)
                     val issues = if (action.result.name == "IssueList") AiIssueParser.parse(result.content).orEmpty() else emptyList()
                     val record = AiHistoryRecord(
                         id = UUID.randomUUID().toString(),
@@ -135,15 +137,15 @@ class AiViewModel(
                         model = config.model,
                         contextSummary = prepared.preview?.summary.orEmpty(),
                         resultKind = action.result.name,
-                        resultPreview = result.content.take(200),
-                        resultText = result.content.take(32 * 1024),
+                        resultPreview = cleaned.take(200),
+                        resultText = cleaned.take(32 * 1024),
                         createdAtMs = System.currentTimeMillis()
                     )
                     historyStore.add(record)
                     lastRecord = record
                     _state.value = _state.value.copy(
                         generating = false,
-                        resultText = result.content,
+                        resultText = cleaned,
                         issues = issues,
                         historyId = record.id
                     )

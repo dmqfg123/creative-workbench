@@ -179,6 +179,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteWork(workId: String) {
         viewModelScope.launch {
             try {
+                // PRD：删除前先自动备份一份，避免误删后只能靠 5 秒撤销。
+                runCatching { container.backup.writeLocalBackup() }
                 chapterRepository.deleteWork(workId)
                 if (_appState.value.currentWorkId == workId) {
                     _appState.value = _appState.value.copy(currentWorkId = null, currentChapterId = null)

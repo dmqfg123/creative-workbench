@@ -68,6 +68,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -78,6 +81,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -127,6 +131,7 @@ import com.creativeworkbench.writer.ui.editor.VisibleBlockBounds
 import com.creativeworkbench.writer.ui.editor.focusedBlockScrollTarget
 import com.creativeworkbench.writer.ui.theme.Motion
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import java.util.concurrent.atomic.AtomicBoolean
@@ -178,6 +183,8 @@ fun EditorScreen(
     var blockMenuOpen by remember { mutableStateOf(false) }
     var notesOpen by remember { mutableStateOf(false) }
     var noteExpanded by remember { mutableStateOf(false) }
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
     var restoredPosition by remember { mutableStateOf(false) }
 
     // 继续上次位置：记住当前章的第一可见段和偏移。
@@ -255,6 +262,7 @@ fun EditorScreen(
     val activeBlockText = state.blocks.firstOrNull { it.id == state.activeBlockId }?.text
     val chapterChars = state.blocks.sumOf { it.text.length }
 
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 10.dp),
@@ -460,6 +468,12 @@ fun EditorScreen(
         }
     }
 
+    SnackbarHost(
+        hostState = snackbar,
+        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp)
+    )
+    }
+
     if (menuOpen) {
         ActionSheet(
             title = state.chapterTitle.ifBlank { "章节" },
@@ -512,6 +526,14 @@ fun EditorScreen(
                 keyboard?.hide()
                 viewModel.insertNote(note.content)
                 notesOpen = false
+                scope.launch {
+                    val result = snackbar.showSnackbar(
+                        message = "已插入笔记，可撤销",
+                        actionLabel = "撤销",
+                        duration = androidx.compose.material3.SnackbarDuration.Short
+                    )
+                    if (result == SnackbarResult.ActionPerformed) viewModel.undo()
+                }
             },
             onDismiss = { notesOpen = false }
         )
@@ -524,7 +546,15 @@ fun EditorScreen(
             hasContent = state.blocks.any { it.text.isNotBlank() },
             hasActiveBlock = state.activeBlockId != null,
             onAction = { actionId ->
-                val selection = if (actionId == AiActions.REWRITE) pendingSelection else null
+                var selection = if (actionId == AiActions.REWRITE) pendingSelection else null
+                // 没选中文字时，改写默认作用于当前段：面板里会明确显示「原文」。
+                if (actionId == AiActions.REWRITE && selection == null) {
+                    val active = state.blocks.firstOrNull { it.id == state.activeBlockId }
+                    if (active != null && active.text.isNotBlank()) {
+                        selection = SelectionInfo(active.id, 0, active.text.length, active.text)
+                        pendingSelection = selection
+                    }
+                }
                 aiViewModel.prepare(actionId, state.blocks, state.activeBlockId, selection)
             },
             onGenerate = { aiViewModel.generate(state.revision, viewModel.contentHash()) },
@@ -575,6 +605,14 @@ fun EditorScreen(
                 aiOpen = false
                 aiViewModel.reset()
                 pendingSelection = null
+                scope.launch {
+                    val result = snackbar.showSnackbar(
+                        message = "已写入，不满意可以撤销",
+                        actionLabel = "撤销",
+                        duration = androidx.compose.material3.SnackbarDuration.Short
+                    )
+                    if (result == SnackbarResult.ActionPerformed) viewModel.undo()
+                }
             },
             onJumpToBlock = { blockId ->
                 val index = blockId.removePrefix("b").toIntOrNull()

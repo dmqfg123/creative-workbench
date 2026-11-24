@@ -92,7 +92,8 @@ fun AiPanel(
                         item.name,
                         active = action?.id == item.id,
                         onClick = {
-                            if (item.id != AiActions.REWRITE || selection != null) onAction(item.id)
+                            // 改写没选中时落到「当前段」，由编辑器侧补选区。
+                            if (item.id != AiActions.REWRITE || selection != null || hasActiveBlock) onAction(item.id)
                         }
                     )
                 }
@@ -102,7 +103,7 @@ fun AiPanel(
                 when {
                     selection != null -> "已选中 " + selection.text.length + " 字；改写只替换这段"
                     !hasContent -> "正文还是空的：续写会从空段开始，检查没有可检查的内容"
-                    else -> "改写需要先在正文里选中一段文字"
+                    else -> "改写：先选中文字，或点正文进入某段后直接改写整段"
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -255,6 +256,7 @@ fun AiPanel(
                     )
                 }
                 if (state.resultText.isNotBlank() && !state.generating) {
+                    GhostButton(text = "重新生成", onClick = onGenerate)
                     GhostButton(text = "复制", onClick = { clipboard.setText(AnnotatedString(state.resultText)) })
                     if (action?.id == AiActions.CONTINUE || action?.id == AiActions.REWRITE) {
                         PillButton(

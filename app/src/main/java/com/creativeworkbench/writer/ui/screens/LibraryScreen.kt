@@ -156,7 +156,7 @@ fun LibraryScreen(
             item {
                 PageHeader(
                     title = "书架",
-                    subtitle = works.size.toString() + " 部作品 · 只存本机"
+                    subtitle = works.count { it.id != pendingDeleteId }.toString() + " 部作品 · 只存本机"
                 ) {
                     IconAction(
                         icon = Icons.Default.Search,
