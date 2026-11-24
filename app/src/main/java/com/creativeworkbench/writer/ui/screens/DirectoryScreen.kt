@@ -159,7 +159,7 @@ fun DirectoryScreen(
                             maxLines = 1
                         )
                         Text(
-                            chapters.size.toString() + " 章 · " + (work?.wordCount ?: 0L) + " 字",
+                            chapters.size.toString() + " 章 · " + chapters.sumOf { it.wordCount } + " 字",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

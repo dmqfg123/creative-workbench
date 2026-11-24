@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.creativeworkbench.writer.WorkbenchApp
 import com.creativeworkbench.writer.core.data.Block
+import com.creativeworkbench.writer.core.data.OpenChapterResult
 import com.creativeworkbench.writer.core.data.SaveResult
 import com.creativeworkbench.writer.core.data.UpdateSource
 import com.creativeworkbench.writer.core.editor.EditCommand
@@ -90,6 +91,37 @@ class EditorViewModel(
                     )
                 }
             }
+        }
+    }
+
+    /**
+     * 回到这个编辑器页面时（例如从作品目录返回），如果磁盘上的章节比内存里的新，
+     * 就把内容换成磁盘版本，避免同一个章节在返回栈里留下两份旧内容。
+     * 只在没有未保存修改时刷新，正在编辑的内容不会被覆盖。
+     */
+    fun refreshIfClean() {
+        val current = _state.value
+        if (current.loading || current.dirty || current.saving) return
+        viewModelScope.launch {
+            val loaded = runCatching { repository.openChapterResult(chapterId) }.getOrNull() ?: return@launch
+            if (loaded !is OpenChapterResult.Ok) return@launch
+            val opened = loaded.opened
+            if (opened.chapter.revision <= _state.value.revision) return@launch
+            val total = refreshWordCounts(opened.content.blocks)
+            _state.update {
+                it.copy(
+                    blocks = opened.content.blocks,
+                    revision = opened.chapter.revision,
+                    chapterTitle = opened.chapter.title,
+                    wordCount = total,
+                    activeBlockId = null,
+                    cursorOffset = 0,
+                    undoAvailable = false,
+                    redoAvailable = false
+                )
+            }
+            undoStack.clear()
+            redoStack.clear()
         }
     }
 

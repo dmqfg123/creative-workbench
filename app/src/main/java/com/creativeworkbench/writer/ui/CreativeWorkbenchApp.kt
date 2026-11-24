@@ -179,7 +179,12 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                         workId = workId,
                         chapterId = chapterId,
                         onBack = { navController.popBackStack() },
-                        onOpenDirectory = { navController.navigate("directory/" + workId) }
+                        onOpenDirectory = {
+                            // 从编辑器去目录：把编辑器从返回栈里换掉，避免同一章在栈里留两份
+                            navController.navigate("directory/" + workId) {
+                                popUpTo("editor/{workId}/{chapterId}") { inclusive = true }
+                            }
+                        }
                     )
                 }
             }
