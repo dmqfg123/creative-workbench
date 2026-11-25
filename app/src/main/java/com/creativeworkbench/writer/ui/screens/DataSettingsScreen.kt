@@ -351,7 +351,10 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                         exportLauncher.launch("雨刮模拟器备份.json.gz")
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                    enabled = clearText.trim() == "清空"
+                    // 确认词只认「清空」。debug 包额外放行 ASCII 的 clear：
+                    // adb 注不进中文，真机回归要靠它跑清空/恢复链路；release 里这段被 BuildConfig 常量化掉。
+                    enabled = clearText.trim() == "清空" ||
+                        (com.creativeworkbench.writer.BuildConfig.DEBUG && clearText.trim().equals("clear", ignoreCase = true))
                 ) { Text("先备份，再清空") }
             },
             dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("取消") } },
