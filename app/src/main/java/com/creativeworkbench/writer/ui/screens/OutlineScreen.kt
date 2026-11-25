@@ -113,8 +113,7 @@ fun OutlineScreen(
                             modifier = Modifier.padding(bottom = 8.dp)
                         )
                         Text(
-                            "大纲是给 AI 的「这一章要写什么」。一条节点 = 一个剧情点：写清楚谁、在哪、发生什么、结尾留什么钩子。\n" +
-                                "写正文时 AI 会带「本章 + 前后各一章 + 全书级」的节点，不会一股脑塞全书。",
+                            "一条 = 一个剧情点。AI 只带本章与相邻章节。",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -260,7 +259,7 @@ private fun OutlineEditorDialog(
                 OutlinedTextField(
                     value = content,
                     onValueChange = { content = it },
-                    label = { Text("要点：谁 / 在哪 / 发生什么 / 结尾钩子") },
+                    label = { Text("要点") },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp, max = 200.dp)
                 )
                 Spacer(Modifier.height(10.dp))

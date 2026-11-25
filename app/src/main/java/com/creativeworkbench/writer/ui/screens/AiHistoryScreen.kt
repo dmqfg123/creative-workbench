@@ -95,7 +95,7 @@ fun AiHistoryScreen(onBack: () -> Unit) {
         if (records.isEmpty()) {
             EmptyState(
                 title = "还没有调用记录",
-                message = "在编辑器里用 AI 续写、改写或检查后，这里会有记录，写入过的还能撤销。"
+                message = "AI 调用记录，写入过的可撤销。"
             )
         } else {
             LazyColumn(

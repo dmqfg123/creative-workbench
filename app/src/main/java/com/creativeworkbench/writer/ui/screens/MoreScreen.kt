@@ -61,35 +61,35 @@ fun MoreScreen(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
     ) {
-        PageHeader(title = "更多", subtitle = "AI、模块、数据与外观")
+        PageHeader(title = "更多", subtitle = "设置")
 
         Column(Modifier.padding(horizontal = 24.dp)) {
             SectionLabel("AI 与内容")
             NavRow(
                 icon = painterResource(R.drawable.ic_sparkle),
                 title = "AI 助手",
-                desc = "配置接口、模型与密钥；续写、改写、检查",
+                desc = "接口、模型、密钥",
                 onClick = onOpenAi
             )
             Spacer(Modifier.height(8.dp))
             NavRow(
                 icon = Icons.Default.List,
                 title = "调用历史",
-                desc = "最近 200 条；写入过的可以撤销",
+                desc = "最近 200 条",
                 onClick = onOpenAiHistory
             )
             Spacer(Modifier.height(8.dp))
             NavRow(
                 icon = Icons.Default.Settings,
                 title = "模块与扩展",
-                desc = "设定笔记开关；动作包导入",
+                desc = "笔记开关、动作包",
                 onClick = onOpenModules
             )
             Spacer(Modifier.height(8.dp))
             NavRow(
                 icon = Icons.Default.List,
                 title = "数据与备份",
-                desc = "导出 / 导入 / 清空 / 单作品导出 / 崩溃日志",
+                desc = "导出 / 导入 / 清空",
                 onClick = onOpenData
             )
 
@@ -136,7 +136,7 @@ fun MoreScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "小 15/27 · 标准 17/31 · 大 19/35；只作用于正文，行距跟着字号变。",
+                    "只作用于正文。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -156,7 +156,7 @@ fun MoreScreen(
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "所有数据只在本机；除 AI 调用外不联网。",
+                    "数据只在本机。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

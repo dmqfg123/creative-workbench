@@ -128,14 +128,19 @@ object ModelCatalog {
         }
         return ModelProfile(
             label = "DeepSeek",
+            // DSH 的官方口径：deepseek-flash / deepseek-v4-pro 上下文都是 1_048_576，
+            // 单请求输出上限按模型目录声明，DSH 的默认值是 256_000
+            // （dsh-llm-deepseek/src/defaults.ts: DEFAULT_MAX_TOKENS）。
             contextWindowTokens = 1_048_576,
-            maxOutputTokens = 393_216,
+            maxOutputTokens = 256_000,
             requestMaxTokens = 4_096,
             thinkingMaxTokens = 16_384,
             // 官方建议创作写作 1.5，但真机实测 1.5 会跑飞（2500+ 字、结构错乱，甚至吐 XML 片段）；
             // 1.2 在“有文采”和“收得住”之间稳定得多。思考模式不认 temperature，请求时不发。
             temperature = 1.2,
-            timeoutSeconds = 180,
+            // 与 DSH 的 streamIdleTimeoutMs（5 分钟）对齐：这是「多久没收到字节」的判据，
+            // 不是请求总时长——写长文时不该被总时长掐断。
+            timeoutSeconds = 300,
             supportsThinking = true
         )
     }

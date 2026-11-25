@@ -156,7 +156,7 @@ class AiContextBuilder(
         val outlineFit = PromptBudget.fitEntries(outlineEntries, outlineCap, "大纲", keepTail = true)
         val outlineText = outlineFit.text
         if (outlineNodes.isNotEmpty() && outlineEntries.isEmpty()) {
-            notes.add("大纲有 " + outlineNodes.size + " 条，但都在本章附近之外，这次没带")
+            notes.add("大纲不在本章范围")
         }
 
         // 最近 10 章摘要：空摘要不占槽；超预算从最早的一章开始整条省略。
@@ -210,22 +210,18 @@ class AiContextBuilder(
 
         val chapterChars = blocks.sumOf { it.text.length }
         if (action.id == AiActions.CHECK && chapterChars > 15000) {
-            notes.add("本次只检查当前段及前后各 2 段（约 " + chapterText.length + " 字），不是全书检查")
+            notes.add("只检查光标段 ±2")
         }
         if (!withBody) {
-            notes.add("已关闭「参考正文」：只按大纲与笔记写，模型不知道你前文原句")
+            notes.add("未带正文")
         } else if (options.bodyRange.radius != null && action.id != AiActions.CHECK) {
-            notes.add("正文只带" + options.bodyRange.label + "（" + chapterText.length + " 字），省 token 也更聚焦")
+            notes.add("正文" + options.bodyRange.shortLabel)
         }
         if (injection.omitted.isNotEmpty()) {
-            notes.add(
-                "设定共 " + settingNotes.size + " 条，已包含 " + injection.kept.size +
-                    " 条（其中命中 " + injection.hitCount + " 条优先），" + injection.omitted.size +
-                    " 条因预算省略：" + injection.omitted.map { it.note.title }.take(6).joinToString("、")
-            )
+            notes.add("设定 " + injection.kept.size + "/" + settingNotes.size + " 条（省 " + injection.omitted.size + "）")
         }
         if (injection.overflowed) {
-            notes.add("有命中设定单条就超过设定预算，已整条保留，其它设定被挤掉")
+            notes.add("设定超预算")
         }
 
         val user = buildString {
@@ -293,17 +289,17 @@ class AiContextBuilder(
             addAll(materialFit.dropped)
         }
         if (chapterFit.dropped.isNotEmpty()) {
-            notes.add("正文超预算，已去掉最早 " + chapterFit.dropped.size + " 段（整段省略，没有截半句）")
+            notes.add("正文超预算，去掉 " + chapterFit.dropped.size + " 段")
         }
         if (outlineFit.dropped.isNotEmpty()) {
-            notes.add("大纲超预算，省略了 " + outlineFit.dropped.size + " 条")
+            notes.add("大纲超预算")
         }
         if (summaryFit.dropped.isNotEmpty()) {
             notes.add("摘要超预算，省略了 " + summaryFit.dropped.size + " 章：" +
                 summaryFit.dropped.map { it.label }.take(4).joinToString("、"))
         }
         if (materialFit.dropped.isNotEmpty()) {
-            notes.add("素材超预算，省略了 " + materialFit.dropped.size + " 条")
+            notes.add("素材超预算")
         }
 
         val sources = buildList {

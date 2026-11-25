@@ -138,7 +138,7 @@ fun ModulesScreen(
                     Column(Modifier.weight(1f)) {
                         Text("设定笔记", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
                         Text(
-                            "关掉后：笔记 Tab、编辑器笔记抽屉、AI 上下文里的笔记一起消失；数据保留，重开恢复。",
+                            "关掉后笔记入口一起隐藏，数据保留。",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

@@ -305,6 +305,11 @@ fun AiPanel(
                 }
             }
 
+            if (state.retryNotice.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Tag(state.retryNotice, active = true)
+            }
+
             if (state.continuedRounds > 0 && !state.generating) {
                 Spacer(Modifier.height(8.dp))
                 Tag("已自动续写 " + state.continuedRounds + " 次（防止截断）", active = true)
@@ -317,7 +322,7 @@ fun AiPanel(
                     color = MaterialTheme.colorScheme.errorContainer
                 ) {
                     Text(
-                        "正文在这次生成之后改过了：只能查看或复制，不能再写入。重新生成会在新内容上再来一次。",
+                        "正文已改过：只能复制，重新生成后可写入。",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onErrorContainer,
                         modifier = Modifier.padding(12.dp)
@@ -461,11 +466,11 @@ fun AiPanel(
             text = {
                 Text(
                     if (action?.id == AiActions.REWRITE || action?.id == AiActions.EXPAND) {
-                        "会用结果替换当前选中的文字，写入后可以撤销。"
+                        "替换选中文字，可撤销。"
                     } else if (hasActiveBlock) {
-                        "会把结果作为新段落接在当前段之后，写入后可以撤销。"
+                        "接在当前段之后，可撤销。"
                     } else {
-                        "会把结果作为新段落接在最后一段之后，写入后可以撤销。"
+                        "接在最后一段之后，可撤销。"
                     }
                 )
             },

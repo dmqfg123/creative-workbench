@@ -203,7 +203,7 @@ fun LibraryScreen(
                     WbCard(contentPadding = PaddingValues(0.dp)) {
                         EmptyState(
                             title = "还没有作品",
-                            message = "所有数据只存本机，AI 可选。先建一部作品，写第一章。",
+                            message = "数据只存本机。先建一部作品。",
                             actionLabel = "新建第一部作品",
                             onAction = { showNewWork = true }
                         )

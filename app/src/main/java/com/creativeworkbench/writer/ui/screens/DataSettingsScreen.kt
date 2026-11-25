@@ -258,7 +258,7 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                 ),
                 SheetAction(
                     label = "整机迁移包（.zip）",
-                    description = "备份 + 动作包；换手机时整包搬过去",
+                    description = "备份 + 动作包，换机整包搬",
                     onClick = {
                         showExportPicker = false
                         zipExportLauncher.launch("雨刮模拟器-迁移包.zip")
@@ -277,7 +277,7 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                 Text(
                     "将导入 " + bundle.works.size + " 部作品 / " + bundle.chapters.size + " 章 / " +
                         bundle.notes.size + " 条笔记 / " + bundle.aiHistory.size + " 条调用历史。\n" +
-                        "当前数据会被整包替换；导入前会自动在本机备份一份。"
+                        "会整包替换，导入前自动备份。"
                 )
             },
             confirmButton = {
@@ -314,7 +314,7 @@ fun DataSettingsScreen(onBack: () -> Unit) {
         AlertDialog(
             onDismissRequest = { confirmIncludeKey = false },
             title = { Text("备份里带密钥？") },
-            text = { Text("导出的 .json.gz 会包含明文 API 密钥，放在手机或网盘里都可能被别人读到。只在换机或重装时用，用完记得删掉。") },
+            text = { Text("含明文密钥，只在换机时用，用完删掉。") },
             confirmButton = {
                 TextButton(onClick = {
                     includeKey = true
@@ -332,7 +332,7 @@ fun DataSettingsScreen(onBack: () -> Unit) {
             title = { Text("清空全部数据") },
             text = {
                 Column {
-                    Text("会先导出备份到文件选择器，再清空本机数据。输入「清空」确认。")
+                    Text("先备份再清空，输入「清空」确认。")
                     Spacer(Modifier.height(10.dp))
                     OutlinedTextField(
                         value = clearText,
@@ -369,8 +369,8 @@ fun DataSettingsScreen(onBack: () -> Unit) {
             title = { Text("用这份备份替换全部数据？") },
             text = {
                 Text(
-                    "「" + file.name + "」会被读出来，替换当前所有作品、章节、笔记与设置（动作包不在这场替换里）。" +
-                        "现有数据会先自动备份一份，但替换后只有这一次可回退。"
+                    "「" + file.name + "」会替换全部作品、章节、笔记与设置（动作包除外）。" +
+                        "替换前自动备份，只有一次可回退。"
                 )
             },
             confirmButton = {
@@ -435,7 +435,7 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "卸载 App 会删掉私有目录，换手机前先导出。",
+                        "卸载会删私有目录，换机前先导出。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -473,7 +473,7 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                 Column(Modifier.weight(1f)) {
                     Text("导出包含 API 密钥", style = MaterialTheme.typography.bodyMedium)
                     Text(
-                        "默认关闭。打开后备份里会有明文密钥，换机更方便，但文件要自己看紧。",
+                        "打开后备份含明文密钥。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -504,12 +504,12 @@ fun DataSettingsScreen(onBack: () -> Unit) {
 
             SectionLabel("每日自动备份")
             Text(
-                "每天启动自动写一份到：文件管理 → Download → 雨刮模拟器备份/",
+                "每天写一份到 Download/雨刮模拟器备份/",
                 style = MaterialTheme.typography.bodySmall
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                "不用选目录、不用授权；这个文件夹不随卸载消失。上次写入：" +
+                "上次写入：" +
                     (lastSafAt?.let { formatTime(it) } ?: "还没有"),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

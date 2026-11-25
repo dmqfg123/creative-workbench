@@ -134,7 +134,7 @@ fun NoteDetailScreen(
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
             title = { Text("删除这条笔记？") },
-            text = { Text("删除后不能恢复；备份里仍可能有旧副本。") },
+            text = { Text("不能恢复（备份里可能还有）。") },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -227,9 +227,9 @@ fun NoteDetailScreen(
             Spacer(Modifier.height(8.dp))
             Text(
                 when {
-                    NoteKind.setting.contains(note.kind) -> "人物 / 设定固定进 AI 上下文，不需要开关。"
-                    note.kind == NoteKind.MEMO -> "备忘只给自己看，不进 AI 上下文。"
-                    else -> "素材类要点下面的开关，才会进 AI 上下文。"
+                    NoteKind.setting.contains(note.kind) -> "人物/设定固定进上下文。"
+                    note.kind == NoteKind.MEMO -> "备忘不进上下文。"
+                    else -> "素材要开开关才进。"
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -258,7 +258,7 @@ fun NoteDetailScreen(
             FieldLine(
                 label = "别名",
                 value = note.aliases,
-                placeholder = "别名，用逗号分隔；AI 出现即注入会用到",
+                placeholder = "别名，逗号分隔",
                 onChange = { value -> viewModel.edit { it.copy(aliases = value) } }
             )
             FieldLine(
@@ -277,7 +277,7 @@ fun NoteDetailScreen(
                 decorationBox = { inner ->
                     if (note.content.isEmpty()) {
                         Text(
-                            "正文。人物、设定、灵感、片段、对白、备忘都写在这里。",
+                            "正文。",
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
@@ -303,7 +303,7 @@ fun NoteDetailScreen(
                         Column(Modifier.weight(1f)) {
                             Text("参与 AI 上下文", style = MaterialTheme.typography.titleSmall)
                             Text(
-                                "打开后，当前作品的 AI 调用会带上这条素材",
+                                "进 AI 上下文",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

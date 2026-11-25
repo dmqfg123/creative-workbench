@@ -245,7 +245,7 @@ fun NotesScreen(
                 works.isEmpty() -> item {
                     EmptyState(
                         title = "先建一部作品",
-                        message = "人物和设定要挂在作品上。去书架建一部，再回来记设定。",
+                        message = "先建一部作品。",
                         actionLabel = "去书架",
                         onAction = onOpenLibrary
                     )
@@ -261,7 +261,7 @@ fun NotesScreen(
                 filtered.isEmpty() -> item {
                     EmptyState(
                         title = "还没有笔记",
-                        message = "人物、设定、灵感、片段、对白、备忘都放这里。写正文时可以随时插入。",
+                        message = "人物、设定、素材都放这里。",
                         actionLabel = "新建笔记",
                         onAction = { showNew = true }
                     )
@@ -322,7 +322,7 @@ fun NotesScreen(
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
             title = { Text("删除 " + selected.size + " 条笔记？") },
-            text = { Text("删除后不能撤销（已自动留了一份本机备份）。正文里的内容不受影响。") },
+            text = { Text("不能撤销（已留本机备份）。") },
             confirmButton = {
                 TextButton(onClick = {
                     val ids = selected.toList()

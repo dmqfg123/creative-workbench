@@ -936,7 +936,7 @@ private fun EditorHeader(
                     Box(Modifier.fillMaxWidth().height(96.dp).padding(10.dp)) {
                         if (note.isEmpty()) {
                             Text(
-                                "本章备注：给 AI 的提醒、待改的地方，都写这里；不计字数。",
+                                "本章备注，不计字数。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1199,14 +1199,14 @@ private fun NotesDrawer(
         ) {
             Text("笔记", style = MaterialTheme.typography.titleLarge)
             Text(
-                "点一条，把正文插入到当前段之后（可撤销）",
+                "点一条插入到当前段之后",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(12.dp))
             if (notes.isEmpty()) {
                 Text(
-                    "还没有笔记。去「笔记」页建人物和设定，AI 会强制带上；素材类可以在这里插入正文。",
+                    "还没有笔记。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 24.dp)

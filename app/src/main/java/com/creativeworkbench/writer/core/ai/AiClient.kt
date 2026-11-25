@@ -1,6 +1,8 @@
 package com.creativeworkbench.writer.core.ai
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -59,18 +61,25 @@ sealed interface AiCallResult {
 }
 
 /**
- * 流式回调：正文增量与「思考中」增量分开给。
- * 思考模式下前端等十几秒没动静是最伤的体验，至少要能显示「正在思考…」。
+ * 流式回调：正文增量与「思考中」增量分开给；
+ * onRetry 让界面能显示「网络抖动，正在第 2 次重试…」，而不是干等。
  */
 data class AiStreamHooks(
     val onDelta: (String) -> Unit = {},
-    val onReasoning: (String) -> Unit = {}
+    val onReasoning: (String) -> Unit = {},
+    val onRetry: (attempt: Int, delayMs: Long, reason: String) -> Unit = { _, _, _ -> }
 )
 
 /**
  * OpenAI 兼容的 chat/completions 客户端。
- * 默认流式（SSE）：首字 1–2 秒就出来，用户不用盯十几秒的「生成中…」。
- * 取消协程会真的 cancel OkHttp Call，连接断掉、不再计费。
+ *
+ * 针对 DeepSeek 的三处设计（都来自 DSH 源码，见 参考/DSH源码借鉴_20261126.md）：
+ * 1) **空闲超时而不是总超时**：DSH 用 streamIdleTimeoutMs（默认 5 分钟）盯「多久没收到字节」，
+ *    不设请求总时长。OkHttp 的 callTimeout 是总时长，写长文时会把还在正常输出的流掐掉——
+ *    这里只用 readTimeout 做空闲判据。
+ * 2) **有界指数退避 + 抖动重试**：429/5xx/超时/网络抖动/空响应都自动重试，
+ *    并且尊重 Retry-After；401/402/400 这类不重试。
+ * 3) **流内错误要当错误**：SSE 中间可能来一条 error 载荷，当成正常结束会让界面显示半截。
  */
 class AiClient {
     suspend fun chat(
@@ -78,6 +87,7 @@ class AiClient {
         apiKey: String,
         messages: List<ChatMessage>,
         tuning: ActionTuning = ActionTuning(),
+        retryPolicy: RetryPolicy = RetryPolicy(),
         hooks: AiStreamHooks? = null,
         /** 声明 DeepSeek 服务端联网工具：模型自己决定搜不搜，搜索在服务端跑。 */
         webSearch: Boolean = false
@@ -88,12 +98,11 @@ class AiClient {
         val stream = hooks != null
         val payload = buildPayload(config, tuning, messages, stream, webSearch)
 
-        val timeout = params.timeoutSeconds.toLong()
         val client = OkHttpClient.Builder()
             .connectTimeout(20L, TimeUnit.SECONDS)
-            .readTimeout(timeout, TimeUnit.SECONDS)
-            .writeTimeout(timeout, TimeUnit.SECONDS)
-            .callTimeout(timeout, TimeUnit.SECONDS)
+            // 空闲判据：DSH 的 streamIdleTimeoutMs = 300_000。故意不设 callTimeout。
+            .readTimeout(IDLE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .writeTimeout(60L, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build()
 
@@ -104,62 +113,118 @@ class AiClient {
             .post(payload.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
-        // 取消协程时要真的把 HTTP 调用掐掉：execute() 是阻塞的，光 cancel 协程调用还在跑、还计费。
-        val call = client.newCall(request)
-        val cancelHandle = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
-            ?.invokeOnCompletion { call.cancel() }
-        try {
-            runCatching {
+        var attempt = 0
+        var lastMessage = "请求失败"
+        while (true) {
+            attempt++
+            val call = client.newCall(request)
+            val cancelHandle = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
+                ?.invokeOnCompletion { call.cancel() }
+            var emitted = 0
+            val outcome: Attempt = try {
                 call.execute().use { response ->
                     if (!response.isSuccessful) {
                         val body = response.body?.string().orEmpty()
-                        return@withContext AiCallResult.Error(describeHttpError(response.code, body))
-                    }
-                    if (stream) {
-                        readStream(response, hooks!!)
+                        Attempt.Fail(
+                            message = describeHttpError(response.code, body),
+                            retryable = AiFailure.isRetryableStatus(response.code),
+                            retryAfter = AiFailure.retryAfterMs(response.header("Retry-After"))
+                        )
+                    } else if (stream) {
+                        readStream(response, hooks!!) { emitted += it }
                     } else {
                         readOnce(response)
                     }
                 }
-            }.getOrElse { error ->
-                AiCallResult.Error("网络错误：" + (error.message ?: error.javaClass.simpleName))
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (error: Throwable) {
+                Attempt.Transport(error)
+            } finally {
+                cancelHandle?.dispose()
             }
-        } finally {
-            cancelHandle?.dispose()
+
+            when (outcome) {
+                is Attempt.Ok -> return@withContext outcome.result
+                is Attempt.Fail -> {
+                    lastMessage = outcome.message
+                    // 已经吐了字就不能重试：重试会把同一段再吐一遍
+                    if (!outcome.retryable || emitted > 0 || attempt > retryPolicy.maxRetries) {
+                        return@withContext AiCallResult.Error(outcome.message)
+                    }
+                    val wait = outcome.retryAfter ?: retryPolicy.delayMs(attempt)
+                    hooks?.onRetry(attempt, wait, outcome.message)
+                    delay(wait)
+                }
+                is Attempt.Transport -> {
+                    if (!AiFailure.isRetryable(outcome.error) || emitted > 0 || attempt > retryPolicy.maxRetries) {
+                        return@withContext AiCallResult.Error(
+                            "网络错误：" + (outcome.error.message ?: outcome.error.javaClass.simpleName)
+                        )
+                    }
+                    val wait = retryPolicy.delayMs(attempt)
+                    hooks?.onRetry(attempt, wait, "网络抖动")
+                    delay(wait)
+                }
+            }
         }
+        @Suppress("UNREACHABLE_CODE")
+        AiCallResult.Error(lastMessage)
     }
 
-    private fun readOnce(response: okhttp3.Response): AiCallResult {
+    private sealed interface Attempt {
+        data class Ok(val result: AiCallResult.Ok) : Attempt
+        data class Fail(val message: String, val retryable: Boolean, val retryAfter: Long?) : Attempt
+        data class Transport(val error: Throwable) : Attempt
+    }
+
+    private fun readOnce(response: okhttp3.Response): Attempt {
         val body = response.body?.string().orEmpty()
         val parsed = runCatching { JSONObject(body) }.getOrNull()
-            ?: return AiCallResult.Error("返回内容不是合法 JSON（前 120 字）：" + body.take(120))
+            ?: return Attempt.Fail("返回内容不是合法 JSON（前 120 字）：" + body.take(120), false, null)
+        parsed.optJSONObject("error")?.let { error ->
+            return Attempt.Fail(error.optString("message").ifBlank { "服务端返回错误" }, true, null)
+        }
         val choice = parsed.optJSONArray("choices")?.optJSONObject(0)
         val content = choice?.optJSONObject("message")?.optString("content").orEmpty()
         val finish = choice?.optString("finish_reason")?.takeIf { it.isNotEmpty() }
         if (content.isBlank()) {
             return if (finish == "length") {
-                AiCallResult.Error("输出被截断：这次思考把额度用完了。重试一次，或先关掉「深度思考」。")
+                Attempt.Fail("输出被截断：这次思考把额度用完了。重试一次，或先关掉「深度思考」。", false, null)
             } else {
-                AiCallResult.Error("模型返回为空")
+                // DSH 把「空响应」当成可重试的 EMPTY_RESPONSE：服务端偶发返回空并不代表请求错了
+                Attempt.Fail("模型返回为空", true, null)
             }
         }
-        return AiCallResult.Ok(content.trim(), parseUsage(parsed.optJSONObject("usage")), finish)
+        return Attempt.Ok(AiCallResult.Ok(content.trim(), parseUsage(parsed.optJSONObject("usage")), finish))
     }
 
-    /** SSE：逐行读 data: {...}，把 delta.content 增量吐出去。 */
-    private fun readStream(response: okhttp3.Response, hooks: AiStreamHooks): AiCallResult {
+    /** SSE：逐行读 data: {...}，把 delta.content 增量吐出去；中途的 error 事件当失败。 */
+    private fun readStream(
+        response: okhttp3.Response,
+        hooks: AiStreamHooks,
+        onEmitted: (Int) -> Unit
+    ): Attempt {
         val source = response.body?.source()
-            ?: return AiCallResult.Error("流式响应为空")
+            ?: return Attempt.Fail("流式响应为空", true, null)
         val builder = StringBuilder()
         var finish: String? = null
         var usage: AiUsage? = null
         while (true) {
             val line = source.readUtf8Line() ?: break
+            if (line.isBlank() || line.startsWith(":")) continue // 心跳注释
             if (!line.startsWith("data:")) continue
             val payload = line.removePrefix("data:").trim()
             if (payload.isEmpty()) continue
             if (payload == "[DONE]") break
             val chunk = runCatching { JSONObject(payload) }.getOrNull() ?: continue
+            chunk.optJSONObject("error")?.let { error ->
+                return Attempt.Fail(
+                    error.optString("message").ifBlank { "服务端在流里返回错误" },
+                    true,
+                    null
+                )
+            }
             chunk.optJSONObject("usage")?.let { usage = (usage ?: AiUsage()) + parseUsage(it) }
             val choice = chunk.optJSONArray("choices")?.optJSONObject(0) ?: continue
             choice.optString("finish_reason").takeIf { it.isNotEmpty() }?.let { finish = it }
@@ -169,18 +234,19 @@ class AiClient {
             val text = delta.optString("content")
             if (text.isNotEmpty()) {
                 builder.append(text)
+                onEmitted(text.length)
                 hooks.onDelta(text)
             }
         }
         val content = builder.toString()
         if (content.isBlank()) {
             return if (finish == "length") {
-                AiCallResult.Error("输出被截断：这次思考把额度用完了。重试一次，或先关掉「深度思考」。")
+                Attempt.Fail("输出被截断：这次思考把额度用完了。重试一次，或先关掉「深度思考」。", false, null)
             } else {
-                AiCallResult.Error("模型返回为空")
+                Attempt.Fail("模型返回为空", true, null)
             }
         }
-        return AiCallResult.Ok(content.trim(), usage, finish)
+        return Attempt.Ok(AiCallResult.Ok(content.trim(), usage, finish))
     }
 
     /**
@@ -209,8 +275,7 @@ class AiClient {
             if (stream && profile.supportsThinking) {
                 put("stream_options", JSONObject().put("include_usage", true))
             }
-            // 服务端联网：只声明工具，客户端不执行任何东西；模型自己决定搜不搜，
-            // 搜索和抓取都在 DeepSeek 服务端跑，结果以引用形式回到正文里。
+            // 服务端联网：只声明工具，客户端不执行任何东西；模型自己决定搜不搜。
             // 注意 tool_choice 不能点名这两个工具，否则 400。
             if (webSearch && profile.supportsThinking) {
                 put(
@@ -284,5 +349,10 @@ class AiClient {
         val scheme = base.substringBefore("://", "").lowercase()
         if (scheme != "https" && !(scheme == "http" && config.allowCleartextHttp)) return null
         return if (base.endsWith("/chat/completions")) base else base + "/chat/completions"
+    }
+
+    private companion object {
+        /** DSH 的 DEFAULT_STREAM_IDLE_TIMEOUT_MS：5 分钟没收到字节才算卡死。 */
+        const val IDLE_TIMEOUT_SECONDS = 300L
     }
 }

@@ -94,7 +94,7 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                 .padding(horizontal = 24.dp)
         ) {
             Text(
-                "只在你点「生成」时联网；密钥加密存在本机，不进备份。",
+                "密钥加密存本机，不进备份。",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -174,7 +174,7 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                         Column(Modifier.weight(1f)) {
                             Text("深度思考", style = MaterialTheme.typography.titleSmall)
                             Text(
-                                "先想再写，接得上伏笔；更慢、更贵。默认关：直接按 1.5 的创作温度往下写。",
+                                "更慢更贵，默认关。",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -202,7 +202,7 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                     Column(Modifier.weight(1f)) {
                         Text("允许明文 HTTP", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            "默认只允许 https；本机 Ollama / LM Studio 才需要打开",
+                            "本机服务（Ollama 等）才需要",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -213,8 +213,7 @@ fun AiSettingsScreen(onBack: () -> Unit) {
 
             SectionLabel("联网搜索（AI 对话窗口用）")
             Text(
-                "模型自己不会联网。打开对话窗口的「联网」后，App 先调这里配置的检索接口，" +
-                    "把前几条摘要塞进上下文，再让模型回答——和 SillyTavern 的外挂检索一个思路，不依赖模型厂商。",
+                "对话窗口的「联网」用这里的检索。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -393,7 +392,7 @@ private fun AutoParamsCard(config: AiConfig) {
             ParamLine("超时", params.timeoutSeconds.toString() + " 秒")
             Spacer(Modifier.height(6.dp))
             Text(
-                "这些按模型自动给，不用手填；填错只会让服务端报 400。",
+                "按模型自动给，不用填。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

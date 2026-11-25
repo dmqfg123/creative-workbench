@@ -131,7 +131,7 @@ fun DirectoryScreen(
     summaryChapter?.let { chapter ->
         TextDialog(
             title = "章节摘要",
-            hint = "100–200 字，给 AI 当最近 10 章的上下文；不写也能用。",
+            hint = "100–200 字，给 AI 参考",
             initial = chapter.summary.orEmpty(),
             limit = 200,
             onDismiss = { summaryChapter = null },
@@ -144,7 +144,7 @@ fun DirectoryScreen(
     noteChapter?.let { chapter ->
         TextDialog(
             title = "本章备注",
-            hint = "给自己看的提醒，不进正文、不计字数。",
+            hint = "只给自己看，不计字数。",
             initial = chapter.note,
             limit = 500,
             onDismiss = { noteChapter = null },
@@ -158,7 +158,7 @@ fun DirectoryScreen(
         AlertDialog(
             onDismissRequest = { deleteChapter = null },
             title = { Text("删除「" + chapter.title + "」？") },
-            text = { Text("会删除正文与日志，不能撤销。建议先导出备份。") },
+            text = { Text("删除正文与日志，不可撤销。") },
             confirmButton = {
                 TextButton(
                     onClick = {

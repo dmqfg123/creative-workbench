@@ -63,7 +63,9 @@ data class AiUiState(
     /** 已经因为撞 max_tokens 自动续写过几次。 */
     val continuedRounds: Int = 0,
     /** 思考模式的思维链字数（只显示「正在思考…」用，不写进结果）。 */
-    val thinkingChars: Int = 0
+    val thinkingChars: Int = 0,
+    /** 自动重试提示（429/5xx/网络抖动时显示「第 N 次重试…」）。 */
+    val retryNotice: String = ""
 )
 
 class AiViewModel(
@@ -109,7 +111,7 @@ class AiViewModel(
         lastSelection = selection
         val config = configStore.config()
         if (!configStore.isConfigured()) {
-            _state.value = AiUiState(action = action, error = "还没配置 AI。去「更多 → AI 助手」填 Base URL、模型和密钥。")
+            _state.value = AiUiState(action = action, error = "还没配置 AI（更多 → AI 助手）。")
             return
         }
         _state.value = _state.value.copy(
@@ -220,6 +222,14 @@ class AiViewModel(
                         },
                         onReasoning = { delta ->
                             _state.update { it.copy(thinkingChars = it.thinkingChars + delta.length) }
+                        },
+                        onRetry = { attempt, waitMs, reason ->
+                            _state.update {
+                                it.copy(
+                                    retryNotice = "第 " + attempt + " 次重试（" + reason + "），等 " +
+                                        (waitMs / 1000.0).let { s -> String.format(java.util.Locale.US, "%.1f", s) } + " 秒"
+                                )
+                            }
                         }
                     )
                 )
@@ -289,6 +299,7 @@ class AiViewModel(
                     historyId = record.id,
                     usage = usage,
                     thinkingChars = 0,
+                    retryNotice = "",
                     error = failure
                 )
             }

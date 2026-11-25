@@ -122,14 +122,10 @@ fun AiChatScreen(
                 item {
                     Column(Modifier.fillMaxWidth().padding(top = 28.dp, start = 8.dp, end = 8.dp)) {
                         Text("想问什么就问", style = MaterialTheme.typography.titleMedium)
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(6.dp))
                         Text(
-                            "没有预设人设、不限制话题：查神话传说、民俗、历史地理、职业细节，" +
-                                "或者讨论情节、人物动机、写法，都行。\n" +
-                                "开「联网」会让 AI 先去查资料再回答；勾「大纲 / 笔记」会把作品资料一起带上。" +
-                                "不勾就是一条 system 都不发的原生模型。\n" +
-                                "满意的回答点「存为笔记」就进笔记板块，写正文时能被 AI 参考。",
-                            style = MaterialTheme.typography.bodyMedium,
+                            "「联网」查资料，「大纲 / 笔记」带上作品资料。",
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -197,6 +193,9 @@ fun AiChatScreen(
                         modifier = Modifier.size(16.dp),
                         strokeWidth = 2.dp
                     )
+                }
+                if (state.retryNotice.isNotBlank()) {
+                    Tag(state.retryNotice, active = true)
                 }
             }
             Spacer(Modifier.height(6.dp))

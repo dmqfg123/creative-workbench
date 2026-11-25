@@ -39,10 +39,12 @@ data class AiChatUiState(
     val error: String? = null,
     /** 联网检索开关。 */
     val webEnabled: Boolean = false,
-    /** 对话时是否带上当前作品的大纲 / 笔记。 */
-    val includeOutline: Boolean = true,
-    val includeNotes: Boolean = true,
+    /** 对话时是否带上当前作品的大纲 / 笔记。默认关：不加任何东西，勾了才带。 */
+    val includeOutline: Boolean = false,
+    val includeNotes: Boolean = false,
     val lastSearchLabel: String = "",
+    /** 自动重试提示（429/5xx/网络抖动）。 */
+    val retryNotice: String = "",
     val usage: AiUsage? = null,
     val configured: Boolean = true
 )
@@ -84,7 +86,7 @@ class AiChatViewModel(
         val question = text.trim()
         if (question.isEmpty() || _state.value.sending) return
         if (!configStore.isConfigured()) {
-            _state.update { it.copy(error = "还没配置 AI。去「更多 → AI 助手」填 Base URL、模型和密钥。") }
+            _state.update { it.copy(error = "还没配置 AI（更多 → AI 助手）。") }
             return
         }
         val userTurn = ChatTurn(UUID.randomUUID().toString(), "user", question)
@@ -176,6 +178,14 @@ class AiChatViewModel(
                             lastEmit = now
                             updateAssistant(assistantTurn.id, builder.toString(), false)
                         }
+                    },
+                    onRetry = { attempt, waitMs, reason ->
+                        _state.update {
+                            it.copy(
+                                retryNotice = "第 " + attempt + " 次重试（" + reason + "），等 " +
+                                    (waitMs / 1000.0).let { s -> String.format(java.util.Locale.US, "%.1f", s) } + " 秒"
+                            )
+                        }
                     }
                 ),
                 webSearch = serverSearch
@@ -187,7 +197,13 @@ class AiChatViewModel(
                 }
                 is AiCallResult.Ok -> {
                     updateAssistant(assistantTurn.id, com.creativeworkbench.writer.core.ai.PlainText.of(result.content), false, hits)
-                    _state.update { it.copy(sending = false, usage = (it.usage ?: AiUsage()) + result.usage) }
+                    _state.update {
+                        it.copy(
+                            sending = false,
+                            retryNotice = "",
+                            usage = (it.usage ?: AiUsage()) + result.usage
+                        )
+                    }
                 }
             }
         }
