@@ -457,7 +457,9 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                     }
                 })
                 GhostButton(text = "导出…", onClick = { showExportPicker = true })
-                GhostButton(text = "导入恢复", onClick = { importLauncher.launch(arrayOf("application/zip", "application/gzip", "application/json", "application/octet-stream")) })
+                // 只给 "*/*"：HyperOS 的 DocumentsUI 会按 MIME 把 .json.gz 藏起来
+                // （用户明明刚导出过自己的备份，却在选择器里找不到）。文件类型交给解析器校验。
+                GhostButton(text = "导入恢复", onClick = { importLauncher.launch(arrayOf("*/*")) })
             }
             Spacer(Modifier.height(8.dp))
             Row(
