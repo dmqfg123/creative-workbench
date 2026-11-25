@@ -92,6 +92,7 @@ fun DirectoryScreen(
     )
     val chapters by viewModel.chapters.collectAsStateWithLifecycle()
     val work by viewModel.work.collectAsStateWithLifecycle()
+    val outlineCounts by viewModel.outlineCounts.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var searching by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
@@ -261,6 +262,7 @@ fun DirectoryScreen(
                         ChapterRow(
                             chapter = chapter,
                             selected = chapter.id == currentChapterId,
+                            outlineCount = outlineCounts[chapter.id] ?: 0,
                             onClick = { onOpenChapter(chapter.id) },
                             onMenu = { menuChapter = chapter },
                             modifier = Modifier.animateItem()
@@ -354,6 +356,7 @@ fun DirectoryScreen(
 private fun ChapterRow(
     chapter: ChapterEntity,
     selected: Boolean,
+    outlineCount: Int,
     onClick: () -> Unit,
     onMenu: () -> Unit,
     modifier: Modifier = Modifier
@@ -416,7 +419,8 @@ private fun ChapterRow(
                 Text(
                     chapter.wordCount.toString() + " 字" +
                         (if (chapter.note.isNotBlank()) " · 有备注" else "") +
-                        (if (chapter.summary.isNullOrBlank()) "" else " · 有摘要"),
+                        (if (chapter.summary.isNullOrBlank()) "" else " · 有摘要") +
+                        (if (outlineCount > 0) " · 大纲 " + outlineCount + " 条" else ""),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -466,7 +470,8 @@ private fun ContinueChapterCard(chapter: ChapterEntity, onClick: () -> Unit) {
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                chapter.wordCount.toString() + " 字" + (if (chapter.summary.isNullOrBlank()) "" else " · 有摘要"),
+                chapter.wordCount.toString() + " 字" +
+                (if (chapter.summary.isNullOrBlank()) "" else " · 有摘要"),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
             )

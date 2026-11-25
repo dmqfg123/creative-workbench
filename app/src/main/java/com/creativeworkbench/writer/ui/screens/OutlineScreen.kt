@@ -61,7 +61,9 @@ import com.creativeworkbench.writer.ui.outline.OutlineViewModelFactory
 fun OutlineScreen(
     workId: String,
     highlightChapterId: String?,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    /** 点「第 N 章」标签直接跳到那一章的编辑器。 */
+    onOpenChapter: (String) -> Unit = {}
 ) {
     val application = LocalContext.current.applicationContext as Application
     val viewModel: OutlineViewModel = viewModel(
@@ -122,6 +124,25 @@ fun OutlineScreen(
                     }
                 }
             }
+            if (state.nodes.isNotEmpty()) {
+                item {
+                    // 结构诊断（借鉴 Fictionary 的 Story Map：把「空缺」画出来，比给一段 AI 评语有用）
+                    val noOutline = state.chapters.count { chapter ->
+                        state.nodes.none { it.chapterId == chapter.id }
+                    }
+                    val noContent = state.nodes.count { it.content.isBlank() }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Tag(state.chapters.size.toString() + " 章", active = false)
+                        Tag(state.nodes.size.toString() + " 条大纲", active = true)
+                        if (noOutline > 0) Tag(noOutline.toString() + " 章还没大纲", active = true)
+                        if (noContent > 0) Tag(noContent.toString() + " 条没写要点", active = true)
+                        if (noOutline == 0 && noContent == 0) Tag("每章都有大纲", active = true)
+                    }
+                }
+            }
             items(state.nodes, key = { it.id }) { node ->
                 val index = state.nodes.indexOfFirst { it.id == node.id }
                 val chapterLabel = node.chapterId?.let { id ->
@@ -144,7 +165,20 @@ fun OutlineScreen(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
-                        Tag(if (chapterLabel != null) chapterLabel else "全书", active = node.chapterId != null)
+                        if (node.content.isBlank()) {
+                            Tag("缺要点", active = false)
+                            Spacer(Modifier.width(6.dp))
+                        }
+                        if (node.chapterId != null) {
+                            // 点标签跳章：大纲看到「第 3 章」，一下就到正文，不用回目录翻
+                            Tag(
+                                text = chapterLabel ?: "第 N 章",
+                                active = true,
+                                onClick = { onOpenChapter(node.chapterId) }
+                            )
+                        } else {
+                            Tag("全书", active = false)
+                        }
                     }
                     if (node.content.isNotBlank()) {
                         Spacer(Modifier.height(6.dp))
@@ -155,6 +189,19 @@ fun OutlineScreen(
                             maxLines = 3,
                             overflow = TextOverflow.Ellipsis
                         )
+                    }
+                    // 联动：这条大纲绑的章写了多少字（0 字 = 还没动笔）
+                    node.chapterId?.let { chapterId ->
+                        val chapter = state.chapters.firstOrNull { it.id == chapterId }
+                        if (chapter != null) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "正文 " + chapter.wordCount + " 字",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (chapter.wordCount == 0L) MaterialTheme.colorScheme.onSurfaceVariant
+                                else MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                     Spacer(Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {

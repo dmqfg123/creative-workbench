@@ -42,6 +42,8 @@ data class EditorUiState(
     /** 同一部作品的章节列表：编辑器里直接换章，不用退回目录。 */
     val chapters: List<ChapterEntity> = emptyList(),
     val chapterNote: String = "",
+    /** 章节摘要（最近 10 章摘要进 AI 上下文的来源）。 */
+    val chapterSummary: String? = null,
     val blocks: List<Block> = emptyList(),
     val revision: Long = 0L,
     val activeBlockId: String? = null,
@@ -105,6 +107,7 @@ class EditorViewModel(
                             .getOrDefault(emptyList()),
                         chapterTitle = opened.chapter.title,
                         chapterNote = opened.chapter.note,
+                        chapterSummary = opened.chapter.summary,
                         blocks = opened.content.blocks,
                         revision = opened.chapter.revision,
                         wordCount = total,
@@ -158,6 +161,14 @@ class EditorViewModel(
     /** 章节备注：不进正文，不计字数。 */
     fun setChapterNote(note: String) {
         _state.update { it.copy(chapterNote = note) }
+    }
+
+    /** 写入章节摘要（AI 生成后回填）：这是「最近章节摘要」上下文的数据源。 */
+    fun setChapterSummary(summary: String) {
+        val trimmed = summary.trim()
+        val newSummary = trimmed.takeIf { it.isNotEmpty() }
+        _state.update { it.copy(chapterSummary = newSummary) }
+        viewModelScope.launch { runCatching { repository.updateSummary(chapterId, newSummary) } }
     }
 
     fun persistChapterNote() {

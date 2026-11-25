@@ -186,7 +186,11 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                     OutlineScreen(
                         workId = workId,
                         highlightChapterId = appState.currentChapterId,
-                        onBack = { navController.popBackStack() }
+                        onBack = { navController.popBackStack() },
+                        onOpenChapter = { chapterId ->
+                            viewModel.setCurrentChapter(workId, chapterId)
+                            navController.navigate("editor/" + workId + "/" + chapterId)
+                        }
                     )
                 }
                 composable("more") {

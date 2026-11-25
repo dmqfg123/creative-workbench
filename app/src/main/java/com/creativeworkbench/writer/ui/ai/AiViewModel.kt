@@ -161,6 +161,7 @@ class AiViewModel(
     private fun maxTokensFor(action: AiActionSpec, config: com.creativeworkbench.writer.core.ai.AiConfig): Int {
         val wanted = when (action.id) {
             AiActions.CHECK -> action.tuning.maxTokens ?: 6_144
+            AiActions.SUMMARY -> action.tuning.maxTokens ?: 1_024
             AiActions.REWRITE -> (((lastSelection?.text?.length ?: 600) * 1.6).toInt() + 512)
             else -> (_state.value.lengthChars * 1.8).toInt()
         }

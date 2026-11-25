@@ -784,6 +784,37 @@ fun EditorScreen(
             onToggleAllNotes = { includeAll ->
                 aiViewModel.setNotesExcluded(aiContextNotes.map { it.id }, excluded = !includeAll)
                 reprepareAi()
+            },
+            onOpenOutline = {
+                aiOpen = false
+                aiViewModel.reset()
+                viewModel.flushAndBack(onOpenOutline)
+            },
+            onSaveAsOutlineNode = {
+                val text = aiState.resultText.trim()
+                if (text.isNotEmpty()) {
+                    val title = text.lineSequence().firstOrNull()?.take(24)?.ifBlank { state.chapterTitle }
+                        ?: state.chapterTitle
+                    aiOpen = false
+                    aiViewModel.reset()
+                    scope.launch {
+                        runCatching {
+                            app.container.outline.create(
+                                workId = workId,
+                                chapterId = chapterId,
+                                title = title,
+                                content = text
+                            )
+                        }
+                        snackbar.showSnackbar("已存成大纲节点")
+                    }
+                }
+            },
+            onWriteSummary = { text ->
+                viewModel.setChapterSummary(text)
+                aiOpen = false
+                aiViewModel.reset()
+                scope.launch { snackbar.showSnackbar("已写入本章摘要") }
             }
         )
     }

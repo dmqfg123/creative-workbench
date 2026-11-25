@@ -190,6 +190,10 @@ class AiContextBuilder(
                 blocks, checkIndices(blocks, anchorIndex), chapterCap, anchorIndex, markers = true
             )
             // 选中段单独作为【选中文字】发一次，正文窗口里要把它排除，否则同一段算两遍、白花 token
+            // 摘要要覆盖整章，不受「正文范围」影响
+            action.id == AiActions.SUMMARY -> PromptBudget.fitBlocks(
+                blocks, blocks.indices.toList(), chapterCap, null, markers = false
+            )
             action.id == AiActions.REWRITE || action.id == AiActions.EXPAND -> PromptBudget.fitBlocks(
                 blocks,
                 rangedIndices(blocks, rewriteIndices(blocks, selection), options.bodyRange, anchorForRange)
@@ -377,6 +381,9 @@ class AiContextBuilder(
             "把【选中文字】扩写到约 " + lengthChars + " 字：补细节、动作、感官、心理，" +
                 "不要新增情节事件，不要改变人物关系和走向。" +
                 "只输出扩写后的正文，不要任何标记、编号、标题或说明。"
+        AiActions.SUMMARY ->
+            "用 100–200 字总结【当前章】：谁做了什么、结果如何、结尾留下什么钩子。" +
+                "只输出摘要正文，不要标题、不要评价。"
         AiActions.CHECK ->
             "检查【当前章】，输出严格 JSON（不要代码围栏）：" +
                 "{\"issues\":[{\"blockId\":\"段落 id\",\"excerpt\":\"原文片段\",\"severity\":\"low|medium|high\",\"message\":\"问题说明\"}]}。" +

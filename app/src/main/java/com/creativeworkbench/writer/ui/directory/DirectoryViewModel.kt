@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -28,6 +29,12 @@ class DirectoryViewModel(
 
     private val _work = MutableStateFlow<WorkEntity?>(null)
     val work: StateFlow<WorkEntity?> = _work.asStateFlow()
+
+    /** 每章有几条大纲：目录页直接看出来哪章还没排过。 */
+    val outlineCounts: StateFlow<Map<String, Int>> =
+        (application as WorkbenchApp).container.outline.observeByWork(workId)
+            .map { nodes -> nodes.groupingBy { it.chapterId ?: "" }.eachCount() }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val messages = _messages.asSharedFlow()

@@ -9,6 +9,8 @@ object AiActions {
     const val REWRITE = "builtin.rewrite"
     const val EXPAND = "builtin.expand"
     const val CHECK = "builtin.check"
+    /** 把这一章写成摘要，回填 chapter.summary —— 下一章续写时就是靠它知道前面发生了什么。 */
+    const val SUMMARY = "builtin.summary"
 
     val builtin: List<AiActionSpec> = listOf(
         AiActionSpec(
@@ -63,6 +65,22 @@ object AiActions {
             tuning = ActionTuning(maxTokens = 4096)
         ),
         AiActionSpec(
+            id = SUMMARY,
+            name = "本章摘要",
+            context = listOf(
+                ContextSlot.Chapter,
+                ContextSlot.ChapterSummaries,
+                ContextSlot.SettingNotes
+            ),
+            promptFile = "builtin/summary",
+            result = ResultKind.Text,
+            write = WriteTarget.None,
+            whenCondition = ActionWhen.ChapterNotEmpty,
+            priority = 5,
+            // 100–200 字摘要，1K tokens 足够；撞上限会自动续写
+            tuning = ActionTuning(maxTokens = 1024)
+        ),
+        AiActionSpec(
             id = CHECK,
             name = "检查",
             context = listOf(
@@ -89,6 +107,8 @@ object AiActions {
             "只输出改写后的正文本身，不要任何标记、编号或解释。"
         EXPAND -> "你是中文小说作者。把给定的一段扩写得更饱满：补细节、动作、感官、心理，" +
             "不要新增情节事件，不要改变人物关系和走向。只输出扩写后的正文，不要任何标记或解释。"
+        SUMMARY -> "你是中文小说编辑。为给定的一章写一段剧情摘要，供后续章节写作参考。" +
+            "只写已经发生的事实，不评价、不猜测、不润色，只输出摘要正文。"
         CHECK -> "你是中文小说校对与情节检查助手。只报告确定的问题：前后矛盾、人物设定冲突、明显错别字、时间线错误。不要改写正文。"
         else -> "你是中文写作助手。"
     }
@@ -97,6 +117,7 @@ object AiActions {
         CONTINUE -> "请从【当前章】最后一个段落之后继续写 300-600 字，紧接上文，不要重复已有句子。"
         REWRITE -> "请改写下面这段文字，保持情节与信息不变，控制在原文 0.8-1.2 倍长度：\n" + (selection ?: "")
         EXPAND -> "请把下面这段扩写到约 2 倍长度，补细节不补情节：\n" + (selection ?: "")
+        SUMMARY -> "用 100–200 字总结【当前章】：谁做了什么、结果如何、结尾留下了什么。只输出摘要正文。"
         CHECK -> "请检查【当前章】正文，输出严格 JSON（不要代码围栏）：{\"issues\":[{\"blockId\":\"段落 id\",\"excerpt\":\"原文片段\",\"severity\":\"low|medium|high\",\"message\":\"问题说明\"}]}。没有问题就输出 {\"issues\":[]}。"
         else -> ""
     }

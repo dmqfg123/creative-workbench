@@ -87,11 +87,18 @@ fun AiPanel(
     onToggleBody: (Boolean) -> Unit = {},
     onToggleOutline: (Boolean) -> Unit = {},
     onToggleNotes: (Boolean) -> Unit = {},
-    onToggleAllNotes: (Boolean) -> Unit = {}
+    onToggleAllNotes: (Boolean) -> Unit = {},
+    /** 「本章摘要」写入 chapter.summary（不是正文）。 */
+    onWriteSummary: (String) -> Unit = {},
+    /** 大纲为空时点「大纲 0」直接去大纲页（否则那个 chip 只是个没用的标签）。 */
+    onOpenOutline: () -> Unit = {},
+    /** 把摘要存成本章的大纲节点（反向大纲）。 */
+    onSaveAsOutlineNode: () -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val clipboard = LocalClipboardManager.current
     var confirmWrite by remember { mutableStateOf(false) }
+    var confirmSummary by remember { mutableStateOf(false) }
     val action = state.action
 
     ModalBottomSheet(
@@ -157,7 +164,11 @@ fun AiPanel(
                 Tag(
                     text = if (state.includeOutline) "大纲 " + (if (outlineTokens > 0) "有" else "0") else "大纲 关",
                     active = state.includeOutline && outlineTokens > 0,
-                    onClick = { onToggleOutline(!state.includeOutline) }
+                    onClick = {
+                        // 还没写大纲：别只是显示 0，点一下直接去建
+                        if (state.includeOutline && outlineTokens == 0) onOpenOutline()
+                        else onToggleOutline(!state.includeOutline)
+                    }
                 )
                 Tag(
                     text = if (state.includeNotes) "笔记 " + noteCount else "笔记 关",
@@ -166,7 +177,7 @@ fun AiPanel(
                 )
             }
 
-            if (action?.id != AiActions.CHECK && state.includeBody) {
+            if (action?.id != AiActions.CHECK && action?.id != AiActions.SUMMARY && state.includeBody) {
                 Spacer(Modifier.height(8.dp))
                 ChipLine("正文范围") {
                     BodyRange.entries.forEach { range ->
@@ -425,7 +436,11 @@ fun AiPanel(
             }
 
             Spacer(Modifier.height(16.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            // 可横滚：按钮多了（重新生成/复制/写入摘要/存成大纲）会被屏幕裁掉最后一个
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 if (state.prepared != null && state.resultText.isBlank() && !state.generating) {
                     PillButton(
                         text = "生成",
@@ -437,6 +452,17 @@ fun AiPanel(
                 if (state.resultText.isNotBlank() && !state.generating) {
                     GhostButton(text = "重新生成", onClick = onGenerate)
                     GhostButton(text = "复制", onClick = { clipboard.setText(AnnotatedString(state.resultText)) })
+                    // 摘要不是写正文，而是回填到「章节摘要」——下一章 AI 靠它知道前面发生了什么
+                    if (action?.id == AiActions.SUMMARY) {
+                        PillButton(
+                            text = "写入本章摘要",
+                            onClick = { confirmSummary = true },
+                            enabled = !stale
+                        )
+                        // 反向大纲：把刚生成的摘要直接存成这一章的大纲节点，
+                        // 写完一章就有一条「实际写了什么」，下一章生成时能对上计划
+                        GhostButton(text = "存成大纲", onClick = onSaveAsOutlineNode)
+                    }
                     val write = action?.write
                     if (write != null && write != com.creativeworkbench.writer.core.ai.WriteTarget.None) {
                         val replaces = write == com.creativeworkbench.writer.core.ai.WriteTarget.BodyReplaceSelection
@@ -457,6 +483,22 @@ fun AiPanel(
             }
             Spacer(Modifier.height(24.dp))
         }
+    }
+
+    if (confirmSummary) {
+        AlertDialog(
+            onDismissRequest = { confirmSummary = false },
+            title = { Text("写入本章摘要？") },
+            text = { Text("会覆盖这一章原有的摘要，写正文不受影响。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmSummary = false
+                    onWriteSummary(state.resultText)
+                }) { Text("写入") }
+            },
+            dismissButton = { TextButton(onClick = { confirmSummary = false }) { Text("取消") } },
+            shape = MaterialTheme.shapes.large
+        )
     }
 
     if (confirmWrite) {
