@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.creativeworkbench.writer.WorkbenchApp
 import com.creativeworkbench.writer.core.data.Block
+import com.creativeworkbench.writer.core.data.ChapterEntity
 import com.creativeworkbench.writer.core.data.OpenChapterResult
 import com.creativeworkbench.writer.core.data.SaveResult
 import com.creativeworkbench.writer.core.data.UpdateSource
@@ -15,6 +16,7 @@ import com.creativeworkbench.writer.core.editor.EditEngine
 import com.creativeworkbench.writer.core.editor.UndoEntry
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,9 +24,21 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
 
+/**
+ * 段首退格合并的结果：上一段的文字。
+ * 只带这个前缀，让 EditText 用 insert(0, prefix) 增量改文本——
+ * 整段 setText 会把输入法的组合状态一起打掉，长按退格可能就此中断。
+ */
+data class MergedBlock(val prefix: String) {
+    val caret: Int get() = prefix.length
+}
+
 data class EditorUiState(
+    val workId: String = "",
     val workTitle: String = "",
     val chapterTitle: String = "",
+    /** 同一部作品的章节列表：编辑器里直接换章，不用退回目录。 */
+    val chapters: List<ChapterEntity> = emptyList(),
     val chapterNote: String = "",
     val blocks: List<Block> = emptyList(),
     val revision: Long = 0L,
@@ -83,7 +97,10 @@ class EditorViewModel(
                         )
                     }
                     _state.value = EditorUiState(
+                        workId = opened.chapter.workId,
                         workTitle = repository.work(opened.chapter.workId)?.title.orEmpty(),
+                        chapters = runCatching { repository.chapters(opened.chapter.workId) }
+                            .getOrDefault(emptyList()),
                         chapterTitle = opened.chapter.title,
                         chapterNote = opened.chapter.note,
                         blocks = opened.content.blocks,
@@ -142,10 +159,11 @@ class EditorViewModel(
     }
 
     fun persistChapterNote() {
-        val note = _state.value.chapterNote
-        viewModelScope.launch {
-            runCatching { repository.updateChapterNote(chapterId, note) }
-        }
+        viewModelScope.launch { runCatching { persistNoteNow() } }
+    }
+
+    private suspend fun persistNoteNow() {
+        runCatching { repository.updateChapterNote(chapterId, _state.value.chapterNote) }
     }
 
     /**
@@ -323,13 +341,54 @@ class EditorViewModel(
         _state.update { it.copy(activeBlockId = newId, cursorOffset = 0) }
     }
 
-    fun mergeWithPrevious(blockId: String) {
-        val index = _state.value.blocks.indexOfFirst { it.id == blockId }
-        if (index <= 0) return
-        val upper = _state.value.blocks[index - 1]
-        val joinOffset = upper.text.length
-        apply(EditCommand.Merge(upper.id, blockId))
-        _state.update { it.copy(activeBlockId = upper.id, cursorOffset = joinOffset) }
+    /**
+     * 段首退格：把上一段并进当前段，**保留当前段的 block id**。
+     * 关键在「id 不变」——EditorScreen 里 EditText 是按 block.id 记住的，
+     * 换成上一段的 id 会重建 EditText、丢掉输入法连接，长按退格删到段界就断。
+     * 返回上一段的文字，让 EditText 当场 insert 到段首，不用等重组。
+     */
+    fun mergePreviousInto(blockId: String): MergedBlock? {
+        val blocks = _state.value.blocks
+        val index = blocks.indexOfFirst { it.id == blockId }
+        if (index <= 0) return null
+        val upper = blocks[index - 1]
+        val current = blocks[index]
+        val merged = upper.text + current.text
+        val caret = upper.text.length
+        val after = blocks.toMutableList().apply {
+            this[index - 1] = current.copy(text = merged)
+            removeAt(index)
+        }
+        undoStack.addLast(UndoEntry(blocks, after))
+        redoStack.clear()
+        _state.update {
+            it.copy(
+                blocks = after,
+                wordCount = refreshWordCounts(after),
+                dirty = true,
+                activeBlockId = blockId,
+                cursorOffset = caret,
+                undoAvailable = true,
+                redoAvailable = false,
+                error = null
+            )
+        }
+        editVersion++
+        markDirty(after)
+        return MergedBlock(upper.text)
+    }
+
+    /** 编辑器内换章前先落盘：备注与正文都存住再跳。 */
+    fun flushThen(action: () -> Unit) {
+        viewModelScope.launch {
+            withTimeoutOrNull(900) {
+                runCatching {
+                    persistNoteNow()
+                    saveNow()
+                }
+            }
+            action()
+        }
     }
 
     fun move(blockId: String, delta: Int) {
@@ -402,10 +461,20 @@ class EditorViewModel(
         viewModelScope.launch { saveNow() }
     }
 
+    /**
+     * 离开编辑器：先尽量存好，但最多等 900ms，存不完也放人走。
+     * 旧实现只在「保存成功」时才回调页面，一旦碰到保存冲突，返回键就成了死键——
+     * 正文还有 journal 兜底，不能拿「可能丢掉最后一句」换「页面出不去」。
+     */
     fun flushAndBack(onDone: () -> Unit) {
         viewModelScope.launch {
-            saveNow()
-            if (_state.value.error == null) onDone()
+            withTimeoutOrNull(900) {
+                runCatching {
+                    persistNoteNow()
+                    saveNow()
+                }
+            }
+            onDone()
         }
     }
 

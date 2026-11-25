@@ -210,7 +210,17 @@ fun NoteDetailScreen(
                     )
                 }
             }
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(8.dp))
+            Text(
+                when {
+                    NoteKind.setting.contains(note.kind) -> "人物 / 设定固定进 AI 上下文，不需要开关。"
+                    note.kind == NoteKind.MEMO -> "备忘只给自己看，不进 AI 上下文。"
+                    else -> "素材类要点下面的开关，才会进 AI 上下文。"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
             BasicTextField(
                 value = note.title,
                 onValueChange = { viewModel.edit { n -> n.copy(title = it) } },
@@ -261,42 +271,29 @@ fun NoteDetailScreen(
                 }
             )
 
-            Spacer(Modifier.height(18.dp))
-            Surface(
-                shape = MaterialTheme.shapes.medium,
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            // 只有素材类（灵感/片段/对白）有得选，才给开关。
+            // 人物/设定固定参与、备忘不参与——放个点不动的开关只会骗人。
+            if (NoteKind.material.contains(note.kind)) {
+                Spacer(Modifier.height(18.dp))
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            if (note.kind == NoteKind.MEMO) "不参与 AI 上下文" else "参与 AI 上下文",
-                            style = MaterialTheme.typography.titleSmall
-                        )
-                        Text(
-                            if (NoteKind.setting.contains(note.kind)) {
-                                "设定类固定参与，不能关闭"
-                            } else if (note.kind == NoteKind.MEMO) {
-                                "备忘不参与 AI 上下文"
-                            } else {
-                                "打开后，AI 调用会带上这条素材"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    if (note.kind == NoteKind.MEMO) {
-                        Text("—", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else {
-                        Switch(
-                            checked = NoteKind.setting.contains(note.kind) || note.aiReference,
-                            enabled = !NoteKind.setting.contains(note.kind),
-                            onCheckedChange = { viewModel.setAiReference(it) }
-                        )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("参与 AI 上下文", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "打开后，AI 调用会带上这条素材",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(checked = note.aiReference, onCheckedChange = { viewModel.setAiReference(it) })
                     }
                 }
             }

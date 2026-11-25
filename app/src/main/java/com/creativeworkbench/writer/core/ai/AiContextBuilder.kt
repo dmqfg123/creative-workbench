@@ -39,7 +39,7 @@ data class PreparedContext(
 
 /**
  * 上下文装配只在这里做：平台负责决定读什么，AI 无权挑选。
- * 预算 = 窗口 × 60% − 预留输出；分槽 设定 40% / 正文 40% / 摘要 10% / 素材 10%。
+ * 预算 = min(模型窗口, 13 万 tokens) × 60% − 本次输出上限；分槽 设定 40% / 正文 40% / 摘要 10% / 素材 10%。
  */
 class AiContextBuilder(
     private val chapters: ChapterRepository,
@@ -58,7 +58,7 @@ class AiContextBuilder(
     ): PreparedContext {
         val chapterList = chapters.chapters(workId)
         val allNotes = noteRepository.observeAll().first()
-        val budget = ((config.contextWindowTokens * 0.6).toInt() - config.reservedOutputTokens).coerceAtLeast(1024)
+        val budget = ContextBudget.from(config.profile).budgetTokens.coerceAtLeast(1024)
         val settingCap = (budget * 0.40).toInt()
         val chapterCap = (budget * 0.40).toInt()
         val summaryCap = (budget * 0.10).toInt()

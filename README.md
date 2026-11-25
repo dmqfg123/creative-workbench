@@ -4,7 +4,9 @@
 
 ## 状态
 
-- 版本：**0.10.0**（versionCode 21，tag v0.10.0）；S1–S5 全部落地。
+- 版本：**0.11.0**（versionCode 22，未打 tag）；S1–S5 全部落地。
+- 0.11.0 状态：按使用反馈重做 AI 参数 / 假按钮 / 编辑器交互；**只编译过（compileReleaseKotlin），未构建 APK、未装机、未跑单测**。回归清单见 项目\待办_0.11.0真机回归_20261125.md。
+- 上一个可安装版本：0.10.0（versionCode 21，tag v0.10.0，APK 在 apk/）。
 - 构建：AGP 8.5.2 / Gradle 8.9 / Kotlin 2.0.21 / compileSdk 34 / minSdk 29；release 已开 R8。
 - APK：release **3.5 MB** / debug 28.9 MB；已多次覆盖安装到 Redmi Note 11 5G（Android 13），数据保留。
 - 单测：**67 条全通过**（`gradlew testDebugUnitTest`）。

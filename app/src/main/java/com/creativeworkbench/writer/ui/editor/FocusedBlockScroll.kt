@@ -30,6 +30,12 @@ fun focusedBlockScrollTarget(
     if (focused != null) {
         val start = focused.offset
         val end = focused.offset + focused.size
+        val available = (effectiveEnd - viewportStartOffset).coerceAtLeast(1)
+        if (focused.size > available) {
+            // 段落本身比可视区还高：硬塞进去会把段首顶出屏幕，不如把段首对齐到视口顶部，
+            // 让「正在写的那一段」从上往下长，光标跟得上。
+            return if (start == viewportStartOffset) null else FocusScrollTarget.By(start - viewportStartOffset)
+        }
         return when {
             start < viewportStartOffset -> FocusScrollTarget.By(start - viewportStartOffset)
             end > effectiveEnd -> FocusScrollTarget.By(end - effectiveEnd)

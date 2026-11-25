@@ -13,31 +13,36 @@ import javax.crypto.spec.GCMParameterSpec
 /**
  * API 配置：普通字段进 SharedPreferences，密钥用 Android Keystore 加密后再落盘。
  * 密钥永远不进备份、日志、崩溃日志。
+ * 0.11.0 起只存「地址 / 模型 / 深度思考」，旧的温度、max_tokens、窗口、超时四个键在保存时清掉。
  */
 class AiConfigStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("workbench_ai", Context.MODE_PRIVATE)
 
-    fun config(): AiConfig = AiConfig(
-        baseUrl = prefs.getString("base_url", "") ?: "",
-        model = prefs.getString("model", "") ?: "",
-        temperature = prefs.getFloat("temperature", 0.8f).toDouble(),
-        maxTokens = prefs.getInt("max_tokens", 2048),
-        timeoutSeconds = prefs.getInt("timeout_seconds", 60),
-        contextWindowTokens = prefs.getInt("context_window", 32768),
-        reservedOutputTokens = prefs.getInt("reserved_output", 2048),
-        allowCleartextHttp = prefs.getBoolean("allow_cleartext", false)
-    )
+    fun config(): AiConfig {
+        // 只在一个键都没有时给默认地址；用户手填的空地址要保留成空，
+        // 否则「自己搭的兼容服务」里清空输入框、保存后又被悄悄换回官方地址。
+        val storedBase = if (prefs.contains("base_url")) prefs.getString("base_url", "") ?: "" else ModelCatalog.DEEPSEEK_BASE_URL
+        val storedModel = prefs.getString("model", "") ?: ""
+        return AiConfig(
+            baseUrl = storedBase.trim(),
+            model = storedModel.trim().ifBlank { ModelCatalog.DEFAULT_MODEL },
+            deepThinking = prefs.getBoolean("deep_thinking", false),
+            allowCleartextHttp = prefs.getBoolean("allow_cleartext", false)
+        )
+    }
 
     fun save(config: AiConfig) {
         prefs.edit()
             .putString("base_url", config.baseUrl.trim())
-            .putString("model", config.model.trim())
-            .putFloat("temperature", config.temperature.toFloat())
-            .putInt("max_tokens", config.maxTokens)
-            .putInt("timeout_seconds", config.timeoutSeconds)
-            .putInt("context_window", config.contextWindowTokens)
-            .putInt("reserved_output", config.reservedOutputTokens)
+            .putString("model", config.model.trim().ifBlank { ModelCatalog.DEFAULT_MODEL })
+            .putBoolean("deep_thinking", config.deepThinking)
             .putBoolean("allow_cleartext", config.allowCleartextHttp)
+            // 旧版本让用户手填的参数：现在按模型自动推导，键留着只会误导。
+            .remove("temperature")
+            .remove("max_tokens")
+            .remove("timeout_seconds")
+            .remove("context_window")
+            .remove("reserved_output")
             .apply()
     }
 
@@ -78,7 +83,7 @@ class AiConfigStore(context: Context) {
         prefs.edit().remove("api_key_enc").apply()
     }
 
-    fun isConfigured(): Boolean = config().baseUrl.isNotBlank() && apiKey().isNotBlank()
+    fun isConfigured(): Boolean = apiKey().isNotBlank() && config().baseUrl.isNotBlank()
 
     private fun secretKey(): SecretKey {
         val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }

@@ -255,6 +255,14 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                         notes = viewModel.notes.collectAsStateWithLifecycle().value,
                         notesEnabled = settings.notesEnabled,
                         onBack = { navController.popBackStack() },
+                        onSwitchChapter = { targetChapterId ->
+                            // 换章：把当前章的编辑器从栈里换掉，返回键仍然回到目录，不会越退越多
+                            viewModel.setCurrentChapter(workId, targetChapterId)
+                            navController.navigate("editor/" + workId + "/" + targetChapterId) {
+                                popUpTo("editor/{workId}/{chapterId}") { inclusive = true }
+                                launchSingleTop = true
+                            }
+                        },
                         onOpenDirectory = {
                             // 从编辑器去目录：把编辑器从返回栈里换掉，避免同一章在栈里留两份
                             navController.navigate("directory/" + workId) {

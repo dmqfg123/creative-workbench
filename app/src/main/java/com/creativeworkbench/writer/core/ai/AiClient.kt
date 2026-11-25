@@ -51,10 +51,15 @@ class AiClient {
     ): AiCallResult = withContext(Dispatchers.IO) {
         val endpoint = endpointFor(config)
             ?: return@withContext AiCallResult.Error("Base URL 不合法：只支持 https；打开「允许明文 HTTP」后才允许 http")
+        val profile = config.profile
         val payload = JSONObject().apply {
             put("model", config.model)
-            put("temperature", config.temperature)
-            put("max_tokens", config.maxTokens)
+            // 参数全部来自模型表：思考模式不发 temperature，省得服务端忽略还让人以为设了有用。
+            profile.temperature?.let { put("temperature", it) }
+            put("max_tokens", profile.requestMaxTokens)
+            if (profile.supportsThinking) {
+                put("thinking", JSONObject().put("type", if (config.deepThinking) "enabled" else "disabled"))
+            }
             put("stream", false)
             put("messages", JSONArray().apply {
                 messages.forEach { message ->
@@ -63,10 +68,13 @@ class AiClient {
             })
         }
 
+        val timeout = profile.timeoutSeconds.toLong()
         val client = OkHttpClient.Builder()
-            .connectTimeout(config.timeoutSeconds.toLong(), TimeUnit.SECONDS)
-            .readTimeout(config.timeoutSeconds.toLong(), TimeUnit.SECONDS)
-            .writeTimeout(config.timeoutSeconds.toLong(), TimeUnit.SECONDS)
+            .connectTimeout(20L, TimeUnit.SECONDS)
+            .readTimeout(timeout, TimeUnit.SECONDS)
+            .writeTimeout(timeout, TimeUnit.SECONDS)
+            .callTimeout(timeout, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
             .build()
 
         val request = Request.Builder()
@@ -85,14 +93,14 @@ class AiClient {
                     )
                 }
                 val parsed = JSONObject(body)
-                val content = parsed
-                    .optJSONArray("choices")
-                    ?.optJSONObject(0)
-                    ?.optJSONObject("message")
-                    ?.optString("content")
-                    .orEmpty()
+                val choice = parsed.optJSONArray("choices")?.optJSONObject(0)
+                val content = choice?.optJSONObject("message")?.optString("content").orEmpty()
                 if (content.isBlank()) {
-                    AiCallResult.Error("模型返回为空")
+                    if (choice?.optString("finish_reason") == "length") {
+                        AiCallResult.Error("输出被截断：这次思考把额度用完了。重试一次，或先关掉「深度思考」。")
+                    } else {
+                        AiCallResult.Error("模型返回为空")
+                    }
                 } else {
                     AiCallResult.Ok(content.trim(), parseUsage(parsed.optJSONObject("usage")))
                 }

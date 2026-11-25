@@ -47,7 +47,9 @@ import com.creativeworkbench.writer.ui.design.WbCard
 import kotlinx.coroutines.launch
 
 /**
- * 模块与扩展：设定笔记可关；内核项单列说明；动作包只含 AI 动作与提示词。
+ * 模块与扩展：只放两个真能用的东西——可关的设定笔记、能导入的 AI 动作包。
+ * 不展示「内核不可关」这类不可操作的信息，也不放「怎么加模块」的开发说明：
+ * 界面上出现的每一块都得是可点、可改的。
  */
 @Composable
 fun ModulesScreen(
@@ -143,29 +145,6 @@ fun ModulesScreen(
                     }
                     Switch(checked = notesEnabled, onCheckedChange = onToggleNotes)
                 }
-            }
-
-            SectionLabel("内核（不可关）")
-            WbCard(contentPadding = PaddingValues(16.dp)) {
-                Text(
-                    "书架、编辑器、AI、备份、设置属于内核，不提供关闭开关；这样做是为了避免关掉后入口和数据对不上。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            SectionLabel("代码模块（编译期）")
-            WbCard(contentPadding = PaddingValues(16.dp)) {
-                Text("怎么加一个模块", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "1) 实现 WorkbenchModule 接口（id、名称、开关默认值、导航项）；" +
-                        "2) 在 ModuleRegistry 里注册，返回可撤销句柄；" +
-                        "3) 把数据表/仓库挂在 AppContainer。模块是编译进 APK 的，不做运行时加载、不做在线安装；" +
-                        "加完重新构建 APK 才会出现。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
 
             SectionLabel("AI 动作包")

@@ -19,7 +19,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,23 +27,29 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.platform.LocalContext
 import com.creativeworkbench.writer.WorkbenchApp
+import com.creativeworkbench.writer.core.ai.AiCallResult
 import com.creativeworkbench.writer.core.ai.AiClient
 import com.creativeworkbench.writer.core.ai.AiConfig
-import com.creativeworkbench.writer.core.ai.AiCallResult
 import com.creativeworkbench.writer.core.ai.ChatMessage
+import com.creativeworkbench.writer.core.ai.ModelCatalog
+import com.creativeworkbench.writer.ui.design.ChipRow
 import com.creativeworkbench.writer.ui.design.GhostButton
 import com.creativeworkbench.writer.ui.design.IconAction
 import com.creativeworkbench.writer.ui.design.PillButton
 import com.creativeworkbench.writer.ui.design.SectionLabel
+import com.creativeworkbench.writer.ui.design.Tag
 import kotlinx.coroutines.launch
 
 /**
- * AI 配置：OpenAI 兼容接口。密钥只在 Android Keystore 里加密保存，界面只显示掩码。
+ * AI 配置：只让用户填「地址 / 模型 / 密钥」，再加一个懂人话的「深度思考」。
+ * 上下文窗口、输出上限、temperature、超时全部按模型自动推导（见 ModelCatalog），
+ * 用户填这些原始 API 参数只会把请求打出 400。
  */
 @Composable
 fun AiSettingsScreen(onBack: () -> Unit) {
@@ -55,11 +60,7 @@ fun AiSettingsScreen(onBack: () -> Unit) {
     var baseUrl by remember { mutableStateOf(initial.baseUrl) }
     var model by remember { mutableStateOf(initial.model) }
     var apiKey by remember { mutableStateOf("") }
-    var temperature by remember { mutableStateOf(String.format(java.util.Locale.US, "%.1f", initial.temperature)) }
-    var maxTokens by remember { mutableStateOf(initial.maxTokens.toString()) }
-    var timeout by remember { mutableStateOf(initial.timeoutSeconds.toString()) }
-    var contextWindow by remember { mutableStateOf(initial.contextWindowTokens.toString()) }
-    var reserved by remember { mutableStateOf(initial.reservedOutputTokens.toString()) }
+    var deepThinking by remember { mutableStateOf(initial.deepThinking) }
     var allowCleartext by remember { mutableStateOf(initial.allowCleartextHttp) }
     var status by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -67,11 +68,7 @@ fun AiSettingsScreen(onBack: () -> Unit) {
     fun currentConfig() = AiConfig(
         baseUrl = baseUrl.trim(),
         model = model.trim(),
-        temperature = temperature.toDoubleOrNull() ?: 0.8,
-        maxTokens = maxTokens.toIntOrNull() ?: 2048,
-        timeoutSeconds = timeout.toIntOrNull() ?: 60,
-        contextWindowTokens = contextWindow.toIntOrNull() ?: 32768,
-        reservedOutputTokens = reserved.toIntOrNull() ?: 2048,
+        deepThinking = deepThinking,
         allowCleartextHttp = allowCleartext
     )
 
@@ -81,7 +78,7 @@ fun AiSettingsScreen(onBack: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconAction(Icons.AutoMirrored.Filled.ArrowBack, "返回", onBack)
-            Text("AI 助手", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            Text("AI 助手", style = MaterialTheme.typography.titleMedium)
         }
         Column(
             Modifier
@@ -94,12 +91,29 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(Modifier.height(16.dp))
+
+            SectionLabel("接口")
+            ChipRow {
+                Tag(
+                    text = "DeepSeek 官方",
+                    active = baseUrl.contains("deepseek", ignoreCase = true),
+                    onClick = {
+                        baseUrl = ModelCatalog.DEEPSEEK_BASE_URL
+                        if (model.isBlank()) model = ModelCatalog.DEFAULT_MODEL
+                    }
+                )
+                Tag(
+                    text = "自己搭的兼容服务",
+                    active = !baseUrl.contains("deepseek", ignoreCase = true),
+                    onClick = { if (baseUrl.contains("deepseek", ignoreCase = true)) baseUrl = "" }
+                )
+            }
+            Spacer(Modifier.height(8.dp))
             OutlinedTextField(
                 value = baseUrl,
                 onValueChange = { baseUrl = it },
                 label = { Text("Base URL") },
-                placeholder = { Text("https://api.deepseek.com/v1") },
+                placeholder = { Text(ModelCatalog.DEEPSEEK_BASE_URL) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
                 shape = MaterialTheme.shapes.small
@@ -109,11 +123,21 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                 value = model,
                 onValueChange = { model = it },
                 label = { Text("模型") },
-                placeholder = { Text("deepseek-chat") },
+                placeholder = { Text(ModelCatalog.DEFAULT_MODEL) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
                 shape = MaterialTheme.shapes.small
             )
+            Spacer(Modifier.height(8.dp))
+            ChipRow {
+                ModelCatalog.presets.forEach { preset ->
+                    Tag(
+                        text = preset.model,
+                        active = model.trim().equals(preset.model, ignoreCase = true),
+                        onClick = { model = preset.model }
+                    )
+                }
+            }
             Spacer(Modifier.height(10.dp))
             OutlinedTextField(
                 value = apiKey,
@@ -127,52 +151,34 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                 shape = MaterialTheme.shapes.small
             )
 
-            SectionLabel("预算与超时")
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = maxTokens,
-                    onValueChange = { maxTokens = it },
-                    label = { Text("maxTokens") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                    shape = MaterialTheme.shapes.small
-                )
-                OutlinedTextField(
-                    value = timeout,
-                    onValueChange = { timeout = it },
-                    label = { Text("超时（秒）") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                    shape = MaterialTheme.shapes.small
-                )
+            SectionLabel("写法")
+            // 只有支持思考模式的模型（DeepSeek）才给这个开关；别家模型放上去点了也没用。
+            if (currentConfig().profile.supportsThinking) {
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("深度思考", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "先想再写，接得上伏笔；更慢、更贵。默认关：直接按 1.5 的创作温度往下写。",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(checked = deepThinking, onCheckedChange = { deepThinking = it })
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
             }
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = contextWindow,
-                    onValueChange = { contextWindow = it },
-                    label = { Text("上下文窗口") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                    shape = MaterialTheme.shapes.small
-                )
-                OutlinedTextField(
-                    value = reserved,
-                    onValueChange = { reserved = it },
-                    label = { Text("预留输出") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                    shape = MaterialTheme.shapes.small
-                )
-            }
-            Spacer(Modifier.height(10.dp))
-            OutlinedTextField(
-                value = temperature,
-                onValueChange = { temperature = it },
-                label = { Text("temperature（0–2）") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                shape = MaterialTheme.shapes.small
+            AutoParamsCard(
+                config = currentConfig()
             )
 
             Spacer(Modifier.height(12.dp))
@@ -203,9 +209,9 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                 PillButton(
                     text = "保存",
                     onClick = {
-                        val config = currentConfig()
-                        store.save(config)
-                        if (apiKey.isNotBlank()) store.saveApiKey(apiKey)
+                        store.save(currentConfig())
+                        if (apiKey.isNotBlank()) store.saveApiKey(apiKey.trim())
+                        apiKey = ""
                         status = "已保存"
                     }
                 )
@@ -214,10 +220,11 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                     onClick = {
                         val config = currentConfig()
                         store.save(config)
-                        if (apiKey.isNotBlank()) store.saveApiKey(apiKey)
+                        if (apiKey.isNotBlank()) store.saveApiKey(apiKey.trim())
+                        apiKey = ""
                         val key = store.apiKey()
-                        if (key.isBlank() || config.baseUrl.isBlank()) {
-                            status = "先填 Base URL 和 API Key"
+                        if (key.isBlank() || config.baseUrl.isBlank() || config.model.isBlank()) {
+                            status = "先填 Base URL、模型和 API Key"
                             return@GhostButton
                         }
                         status = "测试中…"
@@ -246,4 +253,55 @@ fun AiSettingsScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(40.dp))
         }
     }
+}
+
+/** 把自动推导出来的参数摊开给人看：不给改，但也不藏着。 */
+@Composable
+private fun AutoParamsCard(config: AiConfig) {
+    val profile = config.profile
+    val temperature = profile.temperature?.let { it.toString() } ?: "不发（思考模式忽略）"
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Text(
+                "自动套用 · " + profile.label,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium
+            )
+            Spacer(Modifier.height(6.dp))
+            ParamLine("上下文窗口", formatTokens(profile.contextWindowTokens) + " tokens（每次最多带 " + formatTokens(profile.budgetWindowTokens) + "）")
+            ParamLine("单次输出上限", formatTokens(profile.requestMaxTokens) + " tokens")
+            ParamLine("temperature", temperature)
+            ParamLine("超时", profile.timeoutSeconds.toString() + " 秒")
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "这些按模型自动给，不用手填；填错只会让服务端报 400。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun ParamLine(label: String, value: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Text(value, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+private fun formatTokens(value: Int): String = when {
+    value >= 1_000_000 -> (value / 1_000_000).toString() + "M"
+    value % 1024 == 0 -> (value / 1024).toString() + "K"
+    else -> String.format(java.util.Locale.US, "%,d", value)
 }

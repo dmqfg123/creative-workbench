@@ -14,6 +14,7 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputConnectionWrapper
 import android.widget.EditText
@@ -40,6 +41,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -47,6 +49,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -105,6 +110,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -132,6 +138,7 @@ import com.creativeworkbench.writer.ui.design.Tag
 import com.creativeworkbench.writer.ui.editor.EditorViewModel
 import com.creativeworkbench.writer.ui.editor.EditorViewModelFactory
 import com.creativeworkbench.writer.ui.editor.FocusScrollTarget
+import com.creativeworkbench.writer.ui.editor.MergedBlock
 import com.creativeworkbench.writer.ui.editor.VisibleBlockBounds
 import com.creativeworkbench.writer.ui.editor.focusedBlockScrollTarget
 import com.creativeworkbench.writer.ui.theme.Motion
@@ -149,6 +156,7 @@ fun EditorScreen(
     notes: List<NoteEntity>,
     notesEnabled: Boolean,
     onBack: () -> Unit,
+    onSwitchChapter: (String) -> Unit,
     onOpenDirectory: () -> Unit
 ) {
     val application = LocalContext.current.applicationContext as Application
@@ -186,8 +194,10 @@ fun EditorScreen(
         context.getSharedPreferences("editor_positions", Context.MODE_PRIVATE)
     }
     var menuOpen by remember { mutableStateOf(false) }
-    var blockMenuOpen by remember { mutableStateOf(false) }
     var notesOpen by remember { mutableStateOf(false) }
+    var chapterSheetOpen by remember { mutableStateOf(false) }
+    var activeBlockMaxHeight by remember { mutableStateOf(320.dp) }
+    val imeBottomPx = WindowInsets.ime.getBottom(density)
     var noteExpanded by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -242,36 +252,36 @@ fun EditorScreen(
             }
     }
 
-    LaunchedEffect(state.activeBlockId) {
+    // 键盘一弹就把视口挤小；这一步负责把正在写的段拉到键盘上沿之上。
+    // 只监听 activeBlockId 是不够的——那时机在键盘弹出之前，算出来「已可见」就不动了。
+    LaunchedEffect(state.activeBlockId, imeBottomPx, activeBlockMaxHeight) {
         val activeId = state.activeBlockId ?: return@LaunchedEffect
-        snapshotFlow { listState.layoutInfo.viewportEndOffset }
-            .distinctUntilChanged()
-            .collectLatest {
-                val index = state.blocks.indexOfFirst { block -> block.id == activeId }
-                if (index < 0) return@collectLatest
-                withFrameNanos { }
-                val info = listState.layoutInfo
-                if (info.visibleItemsInfo.isEmpty()) return@collectLatest
-                val target = focusedBlockScrollTarget(
-                    focusedIndex = index,
-                    visibleItems = info.visibleItemsInfo.map { item ->
-                        VisibleBlockBounds(item.index, item.offset, item.size)
-                    },
-                    viewportStartOffset = info.viewportStartOffset,
-                    viewportEndOffset = info.viewportEndOffset,
-                    bottomMarginPx = bottomMarginPx
-                )
-                when (target) {
-                    is FocusScrollTarget.By -> listState.animateScrollBy(target.deltaPx.toFloat())
-                    is FocusScrollTarget.ToItem -> listState.animateScrollToItem(target.index, target.scrollOffset)
-                    null -> Unit
-                }
-            }
+        val index = state.blocks.indexOfFirst { block -> block.id == activeId }
+        if (index < 0) return@LaunchedEffect
+        delay(if (imeBottomPx > 0) 160 else 60)
+        withFrameNanos { }
+        val info = listState.layoutInfo
+        if (info.visibleItemsInfo.isEmpty()) return@LaunchedEffect
+        val target = focusedBlockScrollTarget(
+            // LazyColumn 第 0 项是章节头，正文段从 item 下标 +1 算——
+            // 老代码直接拿 block 下标去比，永远对不上正确的 item，这就是「不自动对齐」的一半原因。
+            focusedIndex = index + 1,
+            visibleItems = info.visibleItemsInfo.map { item ->
+                VisibleBlockBounds(item.index, item.offset, item.size)
+            },
+            viewportStartOffset = info.viewportStartOffset,
+            viewportEndOffset = info.viewportEndOffset,
+            bottomMarginPx = bottomMarginPx
+        )
+        when (target) {
+            is FocusScrollTarget.By -> listState.animateScrollBy(target.deltaPx.toFloat())
+            is FocusScrollTarget.ToItem -> listState.animateScrollToItem(target.index, target.scrollOffset)
+            null -> Unit
+        }
     }
 
     BackHandler {
         keyboard?.hide()
-        viewModel.persistChapterNote()
         viewModel.flushAndBack(onBack)
     }
 
@@ -306,23 +316,39 @@ fun EditorScreen(
                 contentDescription = "返回",
                 onClick = {
                     keyboard?.hide()
-                    viewModel.persistChapterNote()
                     viewModel.flushAndBack(onBack)
                 }
             )
-            Column(Modifier.weight(1f).padding(start = 4.dp)) {
+            Column(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable {
+                        keyboard?.hide()
+                        chapterSheetOpen = true
+                    }
+                    .padding(start = 4.dp, top = 4.dp, bottom = 4.dp, end = 4.dp)
+            ) {
                 Text(
                     state.workTitle.ifBlank { "作品" },
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
                 )
-                Text(
-                    state.chapterTitle.ifBlank { "未命名章节" },
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        state.chapterTitle.ifBlank { "未命名章节" },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1
+                    )
+                    Icon(
+                        Icons.Default.KeyboardArrowDown,
+                        contentDescription = "换章",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
             IconButton(
                 onClick = {
@@ -383,9 +409,14 @@ fun EditorScreen(
         }
 
         Column(Modifier.fillMaxSize().imePadding()) {
+          BoxWithConstraints(Modifier.weight(1f)) {
+            // 正在写的这一段最多占视口 55%：段落再长也在框内自己滚，
+            // 光标永远在键盘上方，不用手指去拉页面。
+            val maxBlockHeight = maxHeight * 0.55f
+            LaunchedEffect(maxHeight) { activeBlockMaxHeight = maxBlockHeight }
             LazyColumn(
                 state = listState,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 10.dp, bottom = 20.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
@@ -420,55 +451,51 @@ fun EditorScreen(
                         onExportBackup = { backupExport.launch("雨刮模拟器-紧急备份.json.gz") }
                     )
                 }
-                itemsIndexed(state.blocks, key = { _, block -> block.id }) { _, block ->
+                itemsIndexed(state.blocks, key = { _, block -> block.id }) { index, block ->
                     if (state.activeBlockId == block.id) {
-                        Box(Modifier.fillMaxWidth()) {
-                        ActiveBlockEditor(
-                            block = block,
-                            cursorOffset = state.cursorOffset,
-                            onTextChange = { viewModel.onTextChanged(block.id, it) },
-                            onSplitAt = { viewModel.splitBlock(block.id, it) },
-                            onMergePrevious = { viewModel.mergeWithPrevious(block.id) },
-                            onAiRewrite = { selected, start, end ->
-                                val blockId = state.activeBlockId ?: block.id
-                                pendingSelection = SelectionInfo(blockId, start, end, selected)
-                                keyboard?.hide()
-                                aiOpen = true
-                                aiViewModel.prepare(
-                                    AiActions.REWRITE,
-                                    state.blocks,
-                                    blockId,
-                                    SelectionInfo(blockId, start, end, selected)
-                                )
-                            },
-                            textSizeSp = bodySize,
-                            lineHeightSp = lineHeight,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        // 段落手柄：贴在左边距里，热区 44×44，点一下出「本段操作」
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopStart)
-                                .offset(x = (-20).dp)
-                                .width(44.dp)
-                                .height(44.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { blockMenuOpen = true },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            val handleColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
-                            Canvas(Modifier.size(14.dp)) {
-                                val dot = 1.6.dp.toPx()
-                                val gap = size.height / 3f
-                                repeat(3) { row ->
-                                    drawCircle(
-                                        color = handleColor,
-                                        radius = dot,
-                                        center = androidx.compose.ui.geometry.Offset(size.width / 2f, gap * row + gap / 2f)
+                        Column(Modifier.fillMaxWidth()) {
+                            ActiveBlockEditor(
+                                block = block,
+                                cursorOffset = state.cursorOffset,
+                                onTextChange = { viewModel.onTextChanged(block.id, it) },
+                                onSplitAt = { viewModel.splitBlock(block.id, it) },
+                                onMergePrevious = { viewModel.mergePreviousInto(block.id) },
+                                onAiRewrite = { selected, start, end ->
+                                    val blockId = state.activeBlockId ?: block.id
+                                    pendingSelection = SelectionInfo(blockId, start, end, selected)
+                                    keyboard?.hide()
+                                    aiOpen = true
+                                    aiViewModel.prepare(
+                                        AiActions.REWRITE,
+                                        state.blocks,
+                                        blockId,
+                                        SelectionInfo(blockId, start, end, selected)
                                     )
+                                },
+                                textSizeSp = bodySize,
+                                lineHeightSp = lineHeight,
+                                maxHeight = activeBlockMaxHeight,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            // 段落操作条：固定跟在这一段下面，不再把按钮压在文字上
+                            ParagraphActionBar(
+                                canMoveUp = index > 0,
+                                canMoveDown = index < state.blocks.lastIndex,
+                                onMoveUp = { viewModel.move(block.id, -1) },
+                                onMoveDown = { viewModel.move(block.id, 1) },
+                                onInsertBelow = { viewModel.insertAfter(block.id) },
+                                onDelete = {
+                                    viewModel.remove(block.id)
+                                    scope.launch {
+                                        val result = snackbar.showSnackbar(
+                                            message = "已删除这一段",
+                                            actionLabel = "撤销",
+                                            duration = androidx.compose.material3.SnackbarDuration.Short
+                                        )
+                                        if (result == SnackbarResult.ActionPerformed) viewModel.undo()
+                                    }
                                 }
-                            }
-                        }
+                            )
                         }
                     } else {
                         InactiveBlock(
@@ -494,6 +521,7 @@ fun EditorScreen(
                     }
                 }
             }
+          }
 
             AnimatedVisibility(
                 visible = true,
@@ -515,9 +543,9 @@ fun EditorScreen(
                         val id = state.activeBlockId ?: state.blocks.lastOrNull()?.id
                         if (id != null) viewModel.insertAfter(id)
                     },
-                    onParagraph = {
+                    onChapterList = {
                         keyboard?.hide()
-                        blockMenuOpen = true
+                        chapterSheetOpen = true
                     },
                     onNotes = {
                         keyboard?.hide()
@@ -555,28 +583,25 @@ fun EditorScreen(
         )
     }
 
-    if (blockMenuOpen) {
+    if (chapterSheetOpen) {
         ActionSheet(
-            title = "本段操作",
-            actions = listOf(
+            title = "换章",
+            subtitle = state.workTitle.ifBlank { "作品" } + " · 共 " + state.chapters.size + " 章",
+            actions = state.chapters.map { chapter ->
                 SheetAction(
-                    label = "上移一段",
-                    icon = Icons.Default.KeyboardArrowUp,
-                    onClick = { state.activeBlockId?.let { viewModel.move(it, -1) } }
-                ),
-                SheetAction(
-                    label = "下移一段",
-                    icon = Icons.Default.KeyboardArrowDown,
-                    onClick = { state.activeBlockId?.let { viewModel.move(it, 1) } }
-                ),
-                SheetAction(
-                    label = "删除本段",
-                    icon = Icons.Default.Delete,
-                    destructive = true,
-                    onClick = { state.activeBlockId?.let { viewModel.remove(it) } }
+                    label = chapter.title,
+                    description = chapter.wordCount.toString() + " 字" +
+                        if (chapter.id == chapterId) " · 正在写" else "",
+                    onClick = {
+                        if (chapter.id != chapterId) {
+                            keyboard?.hide()
+                            val target = chapter.id
+                            viewModel.flushThen { onSwitchChapter(target) }
+                        }
+                    }
                 )
-            ),
-            onDismiss = { blockMenuOpen = false }
+            },
+            onDismiss = { chapterSheetOpen = false }
         )
     }
 
@@ -895,6 +920,62 @@ private fun InactiveBlock(
 }
 
 /**
+ * 段落操作条：贴着「正在写的这一段」下面，四等分，位置固定。
+ * 取代 0.10.0 那个浮在正文左侧、压住前两个字的小圆点——
+ * 那个东西既看不见、又点不准、还挡字。
+ */
+@Composable
+private fun ParagraphActionBar(
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    onInsertBelow: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ParagraphAction(Icons.Default.KeyboardArrowUp, "上移", canMoveUp, onMoveUp)
+            ParagraphAction(Icons.Default.KeyboardArrowDown, "下移", canMoveDown, onMoveDown)
+            ParagraphAction(Icons.Default.Add, "新段", true, onInsertBelow)
+            ParagraphAction(Icons.Default.Delete, "删除", true, onDelete, destructive = true)
+        }
+    }
+}
+
+@Composable
+private fun ParagraphAction(
+    icon: ImageVector,
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    destructive: Boolean = false
+) {
+    val tint = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .alpha(if (enabled) 1f else 0.35f)
+            .padding(horizontal = 10.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(4.dp))
+        Text(label, style = MaterialTheme.typography.labelMedium, color = tint)
+    }
+}
+
+/**
  * 键盘上方的工具条：六个等宽触控块，贴住输入法上沿。
  */
 @Composable
@@ -906,7 +987,7 @@ private fun EditorToolbar(
     onUndo: () -> Unit,
     onRedo: () -> Unit,
     onAdd: () -> Unit,
-    onParagraph: () -> Unit,
+    onChapterList: () -> Unit,
     onNotes: () -> Unit,
     onHideKeyboard: () -> Unit
 ) {
@@ -928,7 +1009,7 @@ private fun EditorToolbar(
             ToolbarAction(painterResource(R.drawable.ic_undo), "撤销", undoAvailable, onUndo, Modifier.weight(1f))
             ToolbarAction(painterResource(R.drawable.ic_redo), "重做", redoAvailable, onRedo, Modifier.weight(1f))
             ToolbarAction(Icons.Default.Add, "新段", hasActiveBlock, onAdd, Modifier.weight(1f))
-            ToolbarAction(Icons.Default.List, "段落", hasActiveBlock, onParagraph, Modifier.weight(1f))
+            ToolbarAction(Icons.Default.List, "换章", true, onChapterList, Modifier.weight(1f))
             ToolbarAction(
                 painterResource(R.drawable.ic_notes),
                 "笔记",
@@ -1082,18 +1163,19 @@ private fun ActiveBlockEditor(
     cursorOffset: Int,
     onTextChange: (String) -> Unit,
     onSplitAt: (Int) -> Unit,
-    onMergePrevious: () -> Unit,
+    onMergePrevious: () -> MergedBlock?,
     onAiRewrite: (text: String, start: Int, end: Int) -> Unit,
     textSizeSp: Float,
     lineHeightSp: Float,
+    maxHeight: Dp,
     modifier: Modifier
 ) {
     val context = LocalContext.current
     val textColor = MaterialTheme.colorScheme.onSurface.toArgb()
-    val currentOnTextChange by rememberUpdatedState(onTextChange)
-    val currentOnSplitAt by rememberUpdatedState(onSplitAt)
-    val currentOnMergePrevious by rememberUpdatedState(onMergePrevious)
-    val suppress = remember { AtomicBoolean(false) }
+    val onTextChangeState = rememberUpdatedState(onTextChange)
+    val onSplitAtState = rememberUpdatedState(onSplitAt)
+    val onMergeState = rememberUpdatedState(onMergePrevious)
+    val onAiRewriteState = rememberUpdatedState(onAiRewrite)
 
     val editText = remember(block.id, textSizeSp, lineHeightSp) {
         BlockEditText(context).apply {
@@ -1123,7 +1205,7 @@ private fun ActiveBlockEditor(
                     val start = selectionStart
                     val end = selectionEnd
                     if (start in 0 until end && end <= text.length) {
-                        onAiRewrite(text.substring(start, end), start, end)
+                        onAiRewriteState.value(text.substring(start, end), start, end)
                     }
                     mode?.finish()
                     return true
@@ -1139,7 +1221,7 @@ private fun ActiveBlockEditor(
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
             override fun afterTextChanged(s: Editable?) {
-                if (suppress.get()) return
+                if (editText.suppress.get()) return
                 val inputAtNanos = android.os.SystemClock.elapsedRealtimeNanos()
                 // 输入到下一帧的耗时：只在 debug 打点；release 每敲一个字都写 logcat 会拖慢输入。
                 if (com.creativeworkbench.writer.BuildConfig.DEBUG) {
@@ -1153,29 +1235,34 @@ private fun ActiveBlockEditor(
                 val text = s?.toString().orEmpty()
                 val newline = text.indexOf('\n')
                 if (newline >= 0) {
-                    suppress.set(true)
+                    editText.suppress.set(true)
                     s?.delete(newline, newline + 1)
-                    suppress.set(false)
-                    currentOnSplitAt(newline)
+                    editText.suppress.set(false)
+                    onSplitAtState.value(newline)
                 } else {
-                    currentOnTextChange(text)
+                    onTextChangeState.value(text)
                 }
             }
         }
         editText.addTextChangedListener(watcher)
-        editText.onBackspaceAtStart = { currentOnMergePrevious() }
+        editText.onBackspaceAtStart = { onMergeState.value() }
         editText.setOnKeyListener { _, keyCode, event ->
             if (event.action != KeyEvent.ACTION_DOWN) {
                 false
             } else if (keyCode == KeyEvent.KEYCODE_ENTER && !event.isShiftPressed) {
-                currentOnSplitAt(editText.selectionStart.coerceAtLeast(0))
+                onSplitAtState.value(editText.selectionStart.coerceAtLeast(0))
                 true
             } else if (keyCode == KeyEvent.KEYCODE_DEL &&
                 editText.selectionStart == 0 &&
                 editText.selectionEnd == 0
             ) {
-                currentOnMergePrevious()
-                true
+                val merged = onMergeState.value()
+                if (merged != null) {
+                    editText.applyMerge(merged)
+                    true
+                } else {
+                    false
+                }
             } else {
                 false
             }
@@ -1187,26 +1274,41 @@ private fun ActiveBlockEditor(
         }
     }
 
-    LaunchedEffect(block.id, cursorOffset) {
-        delay(60)
+    // 点一下段落就直接给焦点 + 弹输入法。只在 Compose 里 requestFocus 是不够的：
+    // 焦点有了、键盘不出来，用户就得点第二下——0.10.0 的「要连点两次」就是这么来的。
+    LaunchedEffect(block.id) {
+        delay(40)
         editText.requestFocus()
         editText.setSelection(cursorOffset.coerceIn(0, editText.text.length))
+        editText.postDelayed({ showSoftKeyboard(editText) }, 60)
+    }
+    LaunchedEffect(cursorOffset) {
+        if (editText.selectionStart != cursorOffset) {
+            editText.setSelection(cursorOffset.coerceIn(0, editText.text.length))
+        }
     }
 
     AndroidView(
         factory = { editText },
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().heightIn(max = maxHeight),
         update = { view ->
             if (view.text.toString() != block.text) {
                 val selection = view.selectionStart.coerceAtLeast(0)
-                suppress.set(true)
+                view.suppress.set(true)
                 view.setText(block.text)
                 view.setSelection(selection.coerceAtMost(view.text.length))
-                suppress.set(false)
+                view.suppress.set(false)
             }
             view.setTextColor(textColor)
         }
     )
+}
+
+/** 输入法弹出的可靠做法：窗口有焦点后 showSoftInput，SHOW_IMPLICIT 不弹候选条也能出来。 */
+private fun showSoftKeyboard(view: View) {
+    val imm = view.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
+    if (!view.isFocused) view.requestFocus()
+    imm.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
 }
 
 /**
@@ -1216,7 +1318,23 @@ private fun ActiveBlockEditor(
 private const val MENU_AI_REWRITE = 1001
 
 private class BlockEditText(context: Context) : EditText(context) {
-    var onBackspaceAtStart: (() -> Unit)? = null
+    /** 程序改文本时抬起来，别让 TextWatcher 把它当成用户输入再回写一遍。 */
+    val suppress = AtomicBoolean(false)
+    var onBackspaceAtStart: (() -> MergedBlock?)? = null
+
+    /**
+     * 段首退格跨段的连续删除：把上一段并进来、光标落到接缝处，**同一个 EditText 继续被长按退格**。
+     * 旧实现把活动段切到上一段的 id，EditText 被重建、输入法连接断掉，长按就停在那儿了。
+     */
+    fun applyMerge(merged: MergedBlock) {
+        suppress.set(true)
+        // 增量插入而不是整段 setText：输入法的组合状态不被打断，长按退格才不会断。
+        if (merged.prefix.isNotEmpty()) {
+            text?.insert(0, merged.prefix)
+        }
+        setSelection(merged.caret.coerceIn(0, length()))
+        suppress.set(false)
+    }
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
         val base = super.onCreateInputConnection(outAttrs) ?: return null
@@ -1232,13 +1350,12 @@ private class BlockEditText(context: Context) : EditText(context) {
             }
 
             private fun tryBackspaceAtStart(beforeLength: Int, afterLength: Int): Boolean {
-                if (beforeLength == 1 && afterLength == 0 &&
-                    selectionStart == 0 && selectionEnd == 0
-                ) {
-                    onBackspaceAtStart?.invoke()
-                    return true
-                }
-                return false
+                if (beforeLength < 1 || afterLength != 0) return false
+                if (selectionStart != 0 || selectionEnd != 0) return false
+                if (text.isNullOrEmpty()) return false
+                val merged = onBackspaceAtStart?.invoke() ?: return false
+                applyMerge(merged)
+                return true
             }
         }
     }
