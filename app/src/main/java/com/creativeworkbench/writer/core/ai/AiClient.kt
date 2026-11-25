@@ -81,9 +81,7 @@ class AiClient {
             call.execute().use { response ->
                 val body = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
-                    return@withContext AiCallResult.Error(
-                        "请求失败（" + response.code + "）：" + body.take(300)
-                    )
+                    return@withContext AiCallResult.Error(describeHttpError(response.code, body))
                 }
                 val parsed = JSONObject(body)
                 val choice = parsed.optJSONArray("choices")?.optJSONObject(0)
@@ -131,6 +129,33 @@ class AiClient {
                     put(JSONObject().put("role", message.role).put("content", message.content))
                 }
             })
+        }
+    }
+
+    /**
+     * 把官方错误码翻译成人话（https://api-docs.deepseek.com/quick_start/error_codes）。
+     * 原始 body 只保留 160 字：402/429 这类错误 body 很长，塞进面板没人看。
+     */
+    internal fun describeHttpError(code: Int, body: String): String {
+        val detail = body.take(160).replace("\n", " ")
+        return when (code) {
+            400 -> if (detail.contains("context", ignoreCase = true) ||
+                detail.contains("too long", ignoreCase = true) ||
+                detail.contains("maximum", ignoreCase = true)
+            ) {
+                "这次带的上下文超过了模型上限。把设定精简一点，或检查是不是把整本书都带上了。"
+            } else {
+                "请求格式不对（400）：" + detail
+            }
+            401 -> "API Key 不对或已失效，去「AI 助手」重新填一次。"
+            402 -> "DeepSeek 账户余额不足，充值后再试。"
+            403 -> "这个 Key 没有权限（403）：" + detail
+            408 -> "请求超时，网络或服务端太慢，重试一次。"
+            413 -> "请求体太大（413）：图片或上下文超出限制。"
+            422 -> "参数不合法（422）：" + detail
+            429 -> "请求太频繁或并发超限（429），等几十秒再试。"
+            500, 502, 503, 504 -> "DeepSeek 服务端出错（" + code + "），过一会儿重试。"
+            else -> "请求失败（" + code + "）：" + detail
         }
     }
 

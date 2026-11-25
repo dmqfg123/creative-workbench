@@ -9,7 +9,8 @@
 - **动作级策略 ActionTuning**：续写 4096 / 改写 4096 / 检查 6144 输出上限；思考开关可按动作覆盖全局。
 - **请求参数合并 RequestParams**：思考模式不发 temperature（DeepSeek 不收）、超时 300s、输出 16K 档；非思考用创作温度 1.5。模型表不再随思考开关变形。
 - **前缀缓存友好**：正文渲染去掉「← 从这里续写」这类随光标变化的标记，续写位置改到正文之后的独立一行 —— 这是让 DeepSeek 磁盘缓存能命中的前提。
-- **可测**：AiClient 拆出 buildPayload，新增 ModelCatalogTest 5 条 + AiClientPayloadTest 4 条，直接断言请求体 JSON；共 77 条单测全绿。
+- **错误码按官方表翻译**：400（含 context 判超长）/401/402 余额/408/413/422/429 限流/5xx，原始 body 只留 160 字；新增 AiErrorMappingTest 4 条。
+- **可测**：AiClient 拆出 buildPayload，新增 ModelCatalogTest 5 条 + AiClientPayloadTest 4 条，直接断言请求体 JSON；共 81 条单测全绿。
 - 未做（下一步）：流式 SSE、全篇上下文、FIM 续写、JSON 输出、模型路由。
 
 ## 0.11.0 审查修复（2026-11-25 晚）
