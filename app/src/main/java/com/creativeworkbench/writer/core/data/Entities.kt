@@ -57,6 +57,25 @@ data class NoteEntity(
     val sourceNoteId: String? = null
 )
 
+/**
+ * 大纲节点：一部作品一条有序列表，可选绑定到某一章。
+ * 不用树形父子关系：长篇写作里「卷-章-beat」三层在手机上根本点不动，
+ * 扁平有序 + 章节绑定就够 AI 知道「这章该写什么、下一章往哪走」（见 参考/外部调研_笔记与大纲）。
+ */
+@Entity(tableName = "outline_nodes", indices = [Index("workId"), Index("chapterId")])
+data class OutlineNodeEntity(
+    @PrimaryKey val id: String,
+    val workId: String,
+    /** 绑定的章节；空 = 全书级/卷级节点，不绑定具体章。 */
+    val chapterId: String? = null,
+    val title: String,
+    /** 这一段要写什么（剧情要点、冲突、结尾钩子）。 */
+    val content: String = "",
+    val orderIndex: Int,
+    val createdAtMs: Long,
+    val updatedAtMs: Long
+)
+
 @Entity(tableName = "settings")
 data class SettingEntity(
     @PrimaryKey val key: String,

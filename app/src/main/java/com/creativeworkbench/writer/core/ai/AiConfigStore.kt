@@ -51,27 +51,30 @@ class AiConfigStore(context: Context) {
             clearApiKey()
             return
         }
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, secretKey())
-        val encrypted = cipher.doFinal(key.toByteArray(Charsets.UTF_8))
-        val payload = Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
-            Base64.encodeToString(encrypted, Base64.NO_WRAP)
-        prefs.edit().putString("api_key_enc", payload).apply()
+        prefs.edit().putString("api_key_enc", encrypt(key)).apply()
     }
 
-    fun apiKey(): String {
-        val payload = prefs.getString("api_key_enc", null) ?: return ""
-        return runCatching {
-            val (ivPart, dataPart) = payload.split(":", limit = 2)
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(
-                Cipher.DECRYPT_MODE,
-                secretKey(),
-                GCMParameterSpec(128, Base64.decode(ivPart, Base64.NO_WRAP))
-            )
-            String(cipher.doFinal(Base64.decode(dataPart, Base64.NO_WRAP)), Charsets.UTF_8)
-        }.getOrDefault("")
+    fun apiKey(): String = prefs.getString("api_key_enc", null)?.let { decrypt(it) } ?: ""
+
+    /** AES/GCM 加密后再落盘：密钥不进备份、日志、截图。 */
+    private fun encrypt(raw: String): String {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey())
+        val encrypted = cipher.doFinal(raw.toByteArray(Charsets.UTF_8))
+        return Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
+            Base64.encodeToString(encrypted, Base64.NO_WRAP)
     }
+
+    private fun decrypt(payload: String): String = runCatching {
+        val (ivPart, dataPart) = payload.split(":", limit = 2)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(
+            Cipher.DECRYPT_MODE,
+            secretKey(),
+            GCMParameterSpec(128, Base64.decode(ivPart, Base64.NO_WRAP))
+        )
+        String(cipher.doFinal(Base64.decode(dataPart, Base64.NO_WRAP)), Charsets.UTF_8)
+    }.getOrDefault("")
 
     fun maskedKey(): String {
         val key = apiKey()
@@ -84,6 +87,37 @@ class AiConfigStore(context: Context) {
     }
 
     fun isConfigured(): Boolean = apiKey().isNotBlank() && config().baseUrl.isNotBlank()
+
+    // ---- 联网检索（AI 对话窗口用）：服务商 + 密钥 + 自定义地址 ----
+
+    fun searchProvider(): SearchProvider =
+        SearchProvider.byId(prefs.getString("search_provider", SearchProvider.DEEPSEEK.id) ?: SearchProvider.DEEPSEEK.id)
+
+    fun saveSearchProvider(provider: SearchProvider) {
+        prefs.edit().putString("search_provider", provider.id).apply()
+    }
+
+    fun saveSearchKey(key: String) {
+        if (key.isBlank()) {
+            prefs.edit().remove("search_key_enc").apply()
+            return
+        }
+        prefs.edit().putString("search_key_enc", encrypt(key)).apply()
+    }
+
+    fun searchKey(): String = prefs.getString("search_key_enc", null)?.let { decrypt(it) } ?: ""
+
+    fun maskedSearchKey(): String {
+        val key = searchKey()
+        if (key.isBlank()) return "未配置"
+        return if (key.length <= 8) "••••" else key.take(4) + "••••" + key.takeLast(4)
+    }
+
+    fun customSearchUrl(): String = prefs.getString("search_custom_url", "") ?: ""
+
+    fun saveCustomSearchUrl(url: String) {
+        prefs.edit().putString("search_custom_url", url.trim()).apply()
+    }
 
     private fun secretKey(): SecretKey {
         val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }

@@ -36,16 +36,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.creativeworkbench.writer.core.ai.AiActions
+import com.creativeworkbench.writer.core.ai.BodyRange
+import com.creativeworkbench.writer.core.ai.SelectionInfo
 import com.creativeworkbench.writer.core.data.NoteEntity
 import com.creativeworkbench.writer.core.data.NoteKind
-import com.creativeworkbench.writer.core.ai.SelectionInfo
 import com.creativeworkbench.writer.ui.design.GhostButton
 import com.creativeworkbench.writer.ui.design.PillButton
 import com.creativeworkbench.writer.ui.design.Tag
@@ -54,6 +53,12 @@ import com.creativeworkbench.writer.ui.theme.Motion
 /**
  * AI 面板：动作 → 上下文预览 → 生成 → 结果 → 确认写入。
  * 写入必须二次确认；检查结果不写正文。
+ *
+ * 0.13.0：
+ * - 删掉原来那两行功能说明小字（它们和生成结果挤在一起）；
+ * - 上下文来源（正文/大纲/笔记）与正文范围改成可点的 chip；
+ * - 引用笔记支持全选/清空；
+ * - 生成过程显示实时字数、思考字数、自动续写次数。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -75,9 +80,14 @@ fun AiPanel(
     /** 结果区直接编辑（改完再写入）。 */
     onResultEdit: (String) -> Unit = {},
     /** 可以手动取消引用的设定/素材。 */
-    contextNotes: List<com.creativeworkbench.writer.core.data.NoteEntity> = emptyList(),
+    contextNotes: List<NoteEntity> = emptyList(),
     excludedNoteIds: Set<String> = emptySet(),
-    onToggleNote: (String) -> Unit = {}
+    onToggleNote: (String) -> Unit = {},
+    onBodyRange: (BodyRange) -> Unit = {},
+    onToggleBody: (Boolean) -> Unit = {},
+    onToggleOutline: (Boolean) -> Unit = {},
+    onToggleNotes: (Boolean) -> Unit = {},
+    onToggleAllNotes: (Boolean) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val clipboard = LocalClipboardManager.current
@@ -108,7 +118,8 @@ fun AiPanel(
             ) {
                 state.availableActions.forEach { item ->
                     // 改写：没选中文字、也没点进任何段落时，这个动作做不了——置灰，别让人点了没反应。
-                    val usable = item.id != AiActions.REWRITE || selection != null || hasActiveBlock
+                    val needsSelection = item.id == AiActions.REWRITE || item.id == AiActions.EXPAND
+                    val usable = !needsSelection || selection != null || hasActiveBlock
                     Tag(
                         item.name,
                         active = action?.id == item.id,
@@ -117,15 +128,10 @@ fun AiPanel(
                     )
                 }
             }
-            if (action?.id == AiActions.CONTINUE) {
+
+            if (action?.id == AiActions.CONTINUE || action?.id == AiActions.EXPAND) {
                 Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "续写长度",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.align(Alignment.CenterVertically)
-                    )
+                ChipLine(if (action?.id == AiActions.EXPAND) "扩写到" else "续写长度") {
                     listOf(300, 600, 1000).forEach { len ->
                         Tag(
                             text = len.toString() + " 字",
@@ -135,24 +141,53 @@ fun AiPanel(
                     }
                 }
             }
+
+            Spacer(Modifier.height(10.dp))
+            // 来源 chip 带条数：勾了「大纲」但大纲是空的，以前是静默失效（模型收到的就是空），
+            // 现在会直接显示「大纲 0」，用户一眼知道该去建大纲。
+            val outlineTokens = state.prepared?.preview?.blocks
+                ?.firstOrNull { it.label == "大纲" }?.tokens ?: 0
+            val noteCount = contextNotes.count { it.id !in excludedNoteIds }
+            ChipLine("参考来源") {
+                Tag(
+                    text = "正文",
+                    active = state.includeBody,
+                    onClick = { onToggleBody(!state.includeBody) }
+                )
+                Tag(
+                    text = if (state.includeOutline) "大纲 " + (if (outlineTokens > 0) "有" else "0") else "大纲 关",
+                    active = state.includeOutline && outlineTokens > 0,
+                    onClick = { onToggleOutline(!state.includeOutline) }
+                )
+                Tag(
+                    text = if (state.includeNotes) "笔记 " + noteCount else "笔记 关",
+                    active = state.includeNotes && noteCount > 0,
+                    onClick = { onToggleNotes(!state.includeNotes) }
+                )
+            }
+
+            if (action?.id != AiActions.CHECK && state.includeBody) {
+                Spacer(Modifier.height(8.dp))
+                ChipLine("正文范围") {
+                    BodyRange.entries.forEach { range ->
+                        Tag(
+                            text = range.shortLabel,
+                            active = state.bodyRange == range,
+                            onClick = { onBodyRange(range) }
+                        )
+                    }
+                }
+            }
+
             if (contextNotes.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
                 ContextNotePicker(
                     notes = contextNotes,
                     excluded = excludedNoteIds,
-                    onToggle = onToggleNote
+                    onToggle = onToggleNote,
+                    onToggleAll = onToggleAllNotes
                 )
             }
-            Spacer(Modifier.height(12.dp))
-            Text(
-                when {
-                    selection != null -> "已选中 " + selection.text.length + " 字；改写只替换这段"
-                    !hasContent -> "正文还是空的：续写会从空段开始，检查没有可检查的内容"
-                    else -> "改写：先选中文字，或点正文进入某段后直接改写整段"
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
 
             if (state.error != null) {
                 Spacer(Modifier.height(12.dp))
@@ -196,9 +231,19 @@ fun AiPanel(
                 ) {
                     Column(Modifier.padding(14.dp)) {
                         Text("将发送", style = MaterialTheme.typography.labelMedium)
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            if (preview.sources.isEmpty()) {
+                                Tag("只有任务描述", active = true)
+                            }
+                            preview.sources.forEach { source -> Tag(source, active = true) }
+                        }
+                        Spacer(Modifier.height(6.dp))
                         Text(preview.summary, style = MaterialTheme.typography.bodySmall)
-                        preview.blocks.forEach { block ->
+                        preview.blocks.filter { it.tokens > 0 }.forEach { block ->
                             val ratio = if (block.cap > 0) block.tokens.toFloat() / block.cap else 0f
                             Text(
                                 "· " + block.label + " " + block.tokens + " / " + block.cap + " tokens",
@@ -245,10 +290,24 @@ fun AiPanel(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(modifier = Modifier.height(20.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.padding(horizontal = 6.dp))
-                    Text("生成中…", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        buildString {
+                            append(if (state.thinkingChars > 0) "正在思考… " else "生成中… ")
+                            if (state.resultText.isNotBlank()) append(state.resultText.length).append(" 字")
+                            if (state.continuedRounds > 0) {
+                                append(" · 已自动续写 ").append(state.continuedRounds).append(" 次")
+                            }
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                     Spacer(Modifier.padding(horizontal = 4.dp))
-                    TextButton(onClick = onCancel) { Text("取消") }
+                    TextButton(onClick = onCancel) { Text("停止") }
                 }
+            }
+
+            if (state.continuedRounds > 0 && !state.generating) {
+                Spacer(Modifier.height(8.dp))
+                Tag("已自动续写 " + state.continuedRounds + " 次（防止截断）", active = true)
             }
 
             if (stale && state.resultText.isNotBlank()) {
@@ -265,15 +324,16 @@ fun AiPanel(
                     )
                 }
             }
+
             AnimatedVisibility(
-                visible = state.resultText.isNotBlank() && !state.generating,
+                visible = state.resultText.isNotBlank(),
                 enter = fadeIn(tween(Motion.Medium)) +
                     slideInVertically(tween(Motion.Medium, easing = Motion.EmphasizedDecelerate)) { it / 10 },
                 exit = fadeOut(tween(Motion.Fast))
             ) {
-                Spacer(Modifier.height(14.dp))
-                if (action?.id == AiActions.REWRITE || action?.id == AiActions.CHECK) {
-                    if (selection != null) {
+                Column {
+                    Spacer(Modifier.height(14.dp))
+                    if ((action?.id == AiActions.REWRITE || action?.id == AiActions.CHECK) && selection != null) {
                         Text("原文", style = MaterialTheme.typography.labelMedium)
                         Surface(
                             shape = MaterialTheme.shapes.medium,
@@ -287,36 +347,33 @@ fun AiPanel(
                         }
                         Spacer(Modifier.height(10.dp))
                     }
-                }
-                Text(
-                    if (action?.id == AiActions.CHECK) "检查结果" else "生成结果",
-                    style = MaterialTheme.typography.labelMedium
-                )
-                Spacer(Modifier.height(6.dp))
-                Surface(
-                    shape = MaterialTheme.shapes.medium,
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-                ) {
-                    // 直接在结果区改：想删一句、改个词，不用先写入正文再回头改。
-                    androidx.compose.foundation.text.BasicTextField(
-                        value = state.resultText,
-                        onValueChange = onResultEdit,
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(
-                            color = MaterialTheme.colorScheme.onSurface
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 320.dp)
-                            .verticalScroll(rememberScrollState())
-                            .padding(12.dp)
+                    Text(
+                        (if (action?.id == AiActions.CHECK) "检查结果" else "生成结果") +
+                            " · 已 " + state.resultText.length + " 字",
+                        style = MaterialTheme.typography.labelMedium
                     )
+                    Spacer(Modifier.height(6.dp))
+                    Surface(
+                        shape = MaterialTheme.shapes.medium,
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                    ) {
+                        // 直接在结果区改：想删一句、改个词，不用先写入正文再回头改。
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = state.resultText,
+                            onValueChange = onResultEdit,
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                color = MaterialTheme.colorScheme.onSurface
+                            ),
+                            // 不再给结果框设 320dp 上限 + 内部滚动：
+                            // 那会让长结果在框底被切一刀，看起来就像「生成被截断了」。
+                            // 整块内容交给外层弹层滚动，一次能看完整段。
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp)
+                        )
+                    }
                 }
-                Text(
-                    "可以直接在上面的框里改，改完再写入",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
 
             state.usage?.let { usage ->
@@ -378,10 +435,17 @@ fun AiPanel(
                     val write = action?.write
                     if (write != null && write != com.creativeworkbench.writer.core.ai.WriteTarget.None) {
                         val replaces = write == com.creativeworkbench.writer.core.ai.WriteTarget.BodyReplaceSelection
+                        // 续写写入不要求「当前有活动段落」：没有活动段落就接在最后一段之后。
+                        // 之前这里要求 hasActiveBlock，用户没点进任何段落时按钮是灰的、点了没反应，
+                        // 看起来就是「生成好了却写不进去」。
                         PillButton(
-                            text = if (replaces) "替换选区" else "写入正文",
+                            text = when {
+                                replaces -> "替换选区"
+                                hasActiveBlock -> "写入正文"
+                                else -> "写入正文（接在最后）"
+                            },
                             onClick = { confirmWrite = true },
-                            enabled = !stale && if (replaces) selection != null else hasActiveBlock
+                            enabled = !stale && if (replaces) selection != null else true
                         )
                     }
                 }
@@ -396,8 +460,13 @@ fun AiPanel(
             title = { Text("确认写入？") },
             text = {
                 Text(
-                    if (action?.id == AiActions.REWRITE) "会用结果替换当前选中的文字，写入后可以撤销。"
-                    else "会把结果作为新段落接在当前段之后，写入后可以撤销。"
+                    if (action?.id == AiActions.REWRITE || action?.id == AiActions.EXPAND) {
+                        "会用结果替换当前选中的文字，写入后可以撤销。"
+                    } else if (hasActiveBlock) {
+                        "会把结果作为新段落接在当前段之后，写入后可以撤销。"
+                    } else {
+                        "会把结果作为新段落接在最后一段之后，写入后可以撤销。"
+                    }
                 )
             },
             confirmButton = {
@@ -412,35 +481,66 @@ fun AiPanel(
     }
 }
 
+/** 一行「标题 + chips」：横向可滚，标题不换行。 */
+@Composable
+private fun ChipLine(label: String, chips: @Composable () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(end = 8.dp)
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            chips()
+        }
+    }
+}
+
 /**
- * 引用设定：默认带全部人物/设定，用户可以逐条勾掉。
+ * 引用笔记：默认带全部人物/设定，可以逐条勾掉，也可以整批全选/清空。
+ * 笔记一多，逐条点就是折磨——这就是用户说的「没有全选、管理混乱」。
  */
 @Composable
 private fun ContextNotePicker(
     notes: List<NoteEntity>,
     excluded: Set<String>,
-    onToggle: (String) -> Unit
+    onToggle: (String) -> Unit,
+    onToggleAll: (Boolean) -> Unit
 ) {
     var open by remember { mutableStateOf(false) }
     val included = notes.count { it.id !in excluded }
+    val allIncluded = included == notes.size
     Column(Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
-                .clickable { open = !open }
-                .padding(vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "引用设定 " + included + "/" + notes.size + " 条",
+                "引用笔记 " + included + "/" + notes.size + " 条",
                 style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { open = !open }
+            )
+            Text(
+                if (allIncluded) "全部取消" else "全选",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clickable { onToggleAll(!allIncluded) }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
             )
             Text(
                 if (open) "收起" else "调整",
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clickable { open = !open }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
             )
         }
         if (open) {

@@ -196,6 +196,49 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** 笔记批量删除（多选 / 按日期整组）。 */
+    fun deleteNotes(ids: Collection<String>) {
+        val list = ids.toList()
+        if (list.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                // 删笔记前先留一份本机备份：批量删除手一滑就是几十条，5 秒撤销不够兜底。
+                runCatching { container.backup.writeLocalBackup() }
+                noteRepository.deleteAll(list)
+                _events.emit(AppEvent.Toast("已删除 " + list.size + " 条笔记"))
+            } catch (error: Exception) {
+                _events.emit(AppEvent.Toast("删除失败：" + (error.message ?: "存储错误")))
+            }
+        }
+    }
+
+    /** 把 AI 对话/搜索结论直接存成笔记（素材类，默认参与 AI 上下文）。 */
+    fun saveAiNote(kind: String, title: String, content: String, workId: String?, aiReference: Boolean = true) {
+        if (content.isBlank()) return
+        viewModelScope.launch {
+            try {
+                val now = System.currentTimeMillis()
+                noteRepository.upsert(
+                    NoteEntity(
+                        id = java.util.UUID.randomUUID().toString(),
+                        workId = workId,
+                        kind = kind,
+                        title = title.trim().ifEmpty {
+                            content.lineSequence().firstOrNull()?.take(20) ?: "AI 结果"
+                        },
+                        content = content.trim(),
+                        aiReference = aiReference,
+                        createdAtMs = now,
+                        updatedAtMs = now
+                    )
+                )
+                _events.emit(AppEvent.Toast("已存为笔记"))
+            } catch (error: Exception) {
+                _events.emit(AppEvent.Toast("保存失败：" + (error.message ?: "存储错误")))
+            }
+        }
+    }
+
     private val pendingDeletes = mutableMapOf<String, kotlinx.coroutines.Job>()
 
     /** 5 秒撤销窗口放到 ViewModel：切页面/切 Tab 不会把待删任务取消掉。 */

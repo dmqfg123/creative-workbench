@@ -413,14 +413,28 @@ class ChapterRepository(
     suspend fun deleteWork(workId: String) = withContext(Dispatchers.IO) {
         writeMutex.withLock {
             val chapters = db.chapterDao().listByWork(workId)
+            // 标题要在删之前读：删完 byId 就是 null 了（笔记的来源标签要用它）
+            val workTitle = db.workDao().byId(workId)?.title
             db.workDao().delete(workId)
             chapters.forEach { chapter ->
                 files.delete(chapter.id)
                 files.deleteSnapshots(chapter.id)
                 db.snapshotDao().deleteByChapter(chapter.id)
             }
-            // 人物/设定必须挂在作品上，作品没了就一起删，避免孤儿笔记。
-            db.noteDao().deleteByWork(workId)
+            // 笔记是独立板块：删作品只把笔记摘下来（workId 置空），不连带删除。
+            // 人物/设定是花时间写的资产，误删作品连笔记一起没了是不可接受的。
+            // 摘下来时把来源作品名写成标签，否则一堆孤儿笔记分不清是谁的设定。
+            val now = System.currentTimeMillis()
+            if (!workTitle.isNullOrBlank()) {
+                db.noteDao().listByWork(workId).forEach { note ->
+                    val tag = "原·" + workTitle
+                    val tags = note.tags.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toMutableList()
+                    if (tags.none { it == tag }) tags.add(tag)
+                    db.noteDao().insert(note.copy(tags = tags.joinToString(","), updatedAtMs = now))
+                }
+            }
+            db.noteDao().detachFromWork(workId, now)
+            db.outlineDao().deleteByWork(workId)
         }
     }
 

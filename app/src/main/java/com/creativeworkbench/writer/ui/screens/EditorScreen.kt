@@ -71,6 +71,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -127,6 +128,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.creativeworkbench.writer.R
 import com.creativeworkbench.writer.WorkbenchApp
 import com.creativeworkbench.writer.core.data.Block
+import com.creativeworkbench.writer.core.data.ChapterEntity
 import com.creativeworkbench.writer.core.data.NoteEntity
 import com.creativeworkbench.writer.core.data.NoteKind
 import com.creativeworkbench.writer.core.settings.FontSizePreset
@@ -138,7 +140,9 @@ import com.creativeworkbench.writer.ui.ai.AiViewModel
 import com.creativeworkbench.writer.ui.ai.AiViewModelFactory
 import com.creativeworkbench.writer.ui.components.ActionSheet
 import com.creativeworkbench.writer.ui.components.SheetAction
+import com.creativeworkbench.writer.ui.design.GhostButton
 import com.creativeworkbench.writer.ui.design.IconAction
+import com.creativeworkbench.writer.ui.design.PillButton
 import com.creativeworkbench.writer.ui.design.Tag
 import com.creativeworkbench.writer.ui.editor.EditorViewModel
 import com.creativeworkbench.writer.ui.editor.EditorViewModelFactory
@@ -162,7 +166,8 @@ fun EditorScreen(
     notesEnabled: Boolean,
     onBack: () -> Unit,
     onSwitchChapter: (String) -> Unit,
-    onOpenDirectory: () -> Unit
+    onOpenDirectory: () -> Unit,
+    onOpenOutline: () -> Unit = {}
 ) {
     val application = LocalContext.current.applicationContext as Application
     val app = application as WorkbenchApp
@@ -198,8 +203,10 @@ fun EditorScreen(
     val positionPrefs = remember {
         context.getSharedPreferences("editor_positions", Context.MODE_PRIVATE)
     }
-    var menuOpen by remember { mutableStateOf(false) }
     var notesOpen by remember { mutableStateOf(false) }
+    // 删段落后的撤销条：内联在工具条上方，不再用 Snackbar（会压在键盘/工具条上）
+    var undoBarVisible by remember { mutableStateOf(false) }
+    var undoBarText by remember { mutableStateOf("") }
     var chapterSheetOpen by remember { mutableStateOf(false) }
     var activeBlockMaxHeight by remember { mutableStateOf(320.dp) }
 
@@ -258,15 +265,30 @@ fun EditorScreen(
             }
     }
 
-    // 只在切换段落时对齐几次（等键盘动画落定），**不监听滚动**：
+    // 只在切换段落 / 键盘弹出或收起时对齐几次（等键盘动画落定），**不监听滚动**：
     // 之前盯着视口/可见项变化，用户一上下滑就被拽回光标位置，根本没法看全文。
-    LaunchedEffect(state.activeBlockId) {
+    // 0.13：把「键盘是否弹出」也作为触发条件——之前只在切段时对齐一次，
+    // 搜狗键盘弹得慢（>600ms）时视口还没缩完就对齐完了，光标又被挡在键盘后面，
+    // 用户看到的就是「自动顶到键盘上面这个功能时灵时不灵」。
+    val imePx = WindowInsets.ime.getBottom(density)
+    val imeVisible = imePx > 0
+    // 用「实际 insets 高度」而不是布尔值做 key：26 键/9 键切换、候选条展开都会改变高度，
+    // 只按「弹出/收起」触发的话这些情况不会重新对齐。
+    LaunchedEffect(state.activeBlockId, imePx) {
         val activeId = state.activeBlockId ?: return@LaunchedEffect
         val lazyIndex = state.blocks.indexOfFirst { block -> block.id == activeId } + 1
         if (lazyIndex <= 0) return@LaunchedEffect
-        listOf(120L, 350L, 620L).forEach { wait ->
+        val waits = if (imeVisible) listOf(120L, 320L, 560L, 820L) else listOf(120L, 260L)
+        waits.forEach { wait ->
             delay(wait)
             alignFocusedBlock(listState, lazyIndex, bottomMarginPx)
+        }
+    }
+    // 撤销条 4 秒后自己消失（不阻塞任何操作）
+    LaunchedEffect(undoBarVisible) {
+        if (undoBarVisible) {
+            delay(4000)
+            undoBarVisible = false
         }
     }
 
@@ -286,7 +308,6 @@ fun EditorScreen(
     }
 
     val activeBlockText = state.blocks.firstOrNull { it.id == state.activeBlockId }?.text
-    val chapterChars = state.blocks.sumOf { it.text.length }
 
     Box(Modifier.fillMaxSize()) {
     if (settings.fpsOverlay) {
@@ -370,14 +391,6 @@ fun EditorScreen(
                         modifier = Modifier.size(22.dp)
                     )
                 }
-            }
-            IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(44.dp)) {
-                Icon(
-                    Icons.Default.MoreVert,
-                    contentDescription = "更多",
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(22.dp)
-                )
             }
         }
 
@@ -467,25 +480,6 @@ fun EditorScreen(
                                 maxHeight = activeBlockMaxHeight,
                                 modifier = Modifier.fillMaxWidth()
                             )
-                            // 段落操作条：固定跟在这一段下面，不再把按钮压在文字上
-                            ParagraphActionBar(
-                                canMoveUp = index > 0,
-                                canMoveDown = index < state.blocks.lastIndex,
-                                onMoveUp = { viewModel.move(block.id, -1) },
-                                onMoveDown = { viewModel.move(block.id, 1) },
-                                onInsertBelow = { viewModel.insertAfter(block.id) },
-                                onDelete = {
-                                    viewModel.remove(block.id)
-                                    scope.launch {
-                                        val result = snackbar.showSnackbar(
-                                            message = "已删除这一段",
-                                            actionLabel = "撤销",
-                                            duration = androidx.compose.material3.SnackbarDuration.Short
-                                        )
-                                        if (result == SnackbarResult.ActionPerformed) viewModel.undo()
-                                    }
-                                }
-                            )
                         }
                     } else {
                         InactiveBlock(
@@ -522,69 +516,100 @@ fun EditorScreen(
                     animationSpec = tween(Motion.Fast, easing = Motion.EmphasizedAccelerate)
                 ) { full -> full } + fadeOut(tween(Motion.Fast))
             ) {
-                EditorToolbar(
-                    undoAvailable = state.undoAvailable,
-                    redoAvailable = state.redoAvailable,
-                    hasActiveBlock = state.activeBlockId != null,
-                    notesEnabled = notesEnabled,
-                    onUndo = viewModel::undo,
-                    onRedo = viewModel::redo,
-                    onAdd = {
-                        val id = state.activeBlockId ?: state.blocks.lastOrNull()?.id
-                        if (id != null) viewModel.insertAfter(id)
-                    },
-                    onChapterList = {
-                        keyboard?.hide()
-                        chapterSheetOpen = true
-                    },
-                    onNotes = {
-                        keyboard?.hide()
-                        notesOpen = true
-                    },
-                    onHideKeyboard = { keyboard?.hide() }
-                )
+                Column {
+                    // 提示条放在底栏内部：既不会被键盘挡住，也不会压在正文上（Snackbar 自己是独立窗口，
+                    // 放在外层 Box 里时它只按窗口底部对齐，键盘一弹就钻到键盘后面）。
+                    SnackbarHost(hostState = snackbar, modifier = Modifier.fillMaxWidth())
+                    // 正在编辑哪一段，说清楚：之前点段落没有任何选中反馈，
+                    // 用户不知道「上移/删除」作用在哪一段，只能靠猜。
+                    val activeIndex = state.blocks.indexOfFirst { it.id == state.activeBlockId }
+                    if (activeIndex >= 0) {
+                        Text(
+                            "第 " + (activeIndex + 1) + " / " + state.blocks.size + " 段 · " +
+                                state.blocks[activeIndex].text.length + " 字",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 18.dp, top = 2.dp, bottom = 2.dp)
+                        )
+                    }
+                    // 删除段落的撤销条：内联在工具条上方，不弹窗、不盖字、不被键盘挡。
+                    androidx.compose.animation.AnimatedVisibility(visible = undoBarVisible) {
+                        UndoBar(
+                            text = undoBarText,
+                            onUndo = {
+                                undoBarVisible = false
+                                viewModel.undo()
+                            },
+                            onDismiss = { undoBarVisible = false }
+                        )
+                    }
+                    EditorToolbar(
+                        undoAvailable = state.undoAvailable,
+                        redoAvailable = state.redoAvailable,
+                        hasActiveBlock = state.activeBlockId != null,
+                        canMoveUp = state.blocks.indexOfFirst { it.id == state.activeBlockId } > 0,
+                        canMoveDown = state.blocks.indexOfFirst { it.id == state.activeBlockId }
+                            .let { it in 0 until state.blocks.lastIndex },
+                        onUndo = viewModel::undo,
+                        onRedo = viewModel::redo,
+                        onMoveUp = { state.activeBlockId?.let { viewModel.move(it, -1) } },
+                        onMoveDown = { state.activeBlockId?.let { viewModel.move(it, 1) } },
+                        onAdd = {
+                            val id = state.activeBlockId ?: state.blocks.lastOrNull()?.id
+                            if (id != null) viewModel.insertAfter(id)
+                        },
+                        onDelete = {
+                            val activeId = state.activeBlockId
+                            if (activeId != null) {
+                                viewModel.remove(activeId)
+                                undoBarText = "已删除这一段"
+                                undoBarVisible = true
+                            }
+                        }
+                    )
+                }
             }
         }
     }
 
-    SnackbarHost(
-        hostState = snackbar,
-        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp)
-    )
 
-    // 换章：右侧滑出章节列表，点一下直接进编辑（不再「点标题→弹层→点章节」三步）
+
+    // 换章：这是**唯一**入口（点标题/工具条「章节」）。
+    // 0.12 还有「右上角三点」「侧滑侧栏」两条路，三条路互相打架、
+    // 右侧滑入又和系统返回手势抢边缘手势，全部砍掉，只留底部弹层。
     if (chapterSheetOpen) {
-        ChapterPickerOverlay(
+        ChapterSheet(
+            workTitle = state.workTitle,
             chapters = state.chapters,
             currentChapterId = chapterId,
+            nextChapter = viewModel.nextChapter(),
             onPick = { target ->
                 chapterSheetOpen = false
                 keyboard?.hide()
+                if (target == chapterId) return@ChapterSheet
                 viewModel.flushThen { onSwitchChapter(target) }
+            },
+            onOpenDirectory = {
+                chapterSheetOpen = false
+                keyboard?.hide()
+                viewModel.flushAndBack(onOpenDirectory)
+            },
+            onOpenOutline = {
+                chapterSheetOpen = false
+                keyboard?.hide()
+                viewModel.flushAndBack(onOpenOutline)
+            },
+            onCreateNext = {
+                chapterSheetOpen = false
+                keyboard?.hide()
+                viewModel.createNextChapter { newId -> onSwitchChapter(newId) }
             },
             onDismiss = { chapterSheetOpen = false }
         )
     }
-    }
-
-    if (menuOpen) {
-        ActionSheet(
-            title = state.chapterTitle.ifBlank { "章节" },
-            subtitle = state.wordCount.toString() + " 字" + if (chapterChars >= 50_000) " · 偏长" else "",
-            actions = listOf(
-                SheetAction(
-                    label = "作品目录",
-                    icon = Icons.Default.List,
-                    onClick = { viewModel.flushAndBack(onOpenDirectory) }
-                ),
-                SheetAction(
-                    label = "立即保存",
-                    icon = Icons.Default.Check,
-                    onClick = { viewModel.flush() }
-                )
-            ),
-            onDismiss = { menuOpen = false }
-        )
     }
 
 
@@ -610,7 +635,7 @@ fun EditorScreen(
 
     // 可以手动勾选/取消引用的设定与素材（人物/设定 + 勾过 AI 参考的素材）
     val aiContextNotes = notes.filter {
-        it.workId == workId && (NoteKind.setting.contains(it.kind) ||
+        (it.workId == null || it.workId == workId) && (NoteKind.setting.contains(it.kind) ||
             (NoteKind.material.contains(it.kind) && it.aiReference))
     }
     val reprepareAi: () -> Unit = {
@@ -635,9 +660,11 @@ fun EditorScreen(
             hasContent = state.blocks.any { it.text.isNotBlank() },
             hasActiveBlock = state.activeBlockId != null,
             onAction = { actionId ->
-                var selection = if (actionId == AiActions.REWRITE) pendingSelection else null
-                // 没选中文字时，改写默认作用于当前段：面板里会明确显示「原文」。
-                if (actionId == AiActions.REWRITE && selection == null) {
+                val replacesSelection =
+                    actionId == AiActions.REWRITE || actionId == AiActions.EXPAND
+                var selection = if (replacesSelection) pendingSelection else null
+                // 没选中文字时，改写/扩写默认作用于当前段：面板里会明确显示「原文」。
+                if (replacesSelection && selection == null) {
                     val active = state.blocks.firstOrNull { it.id == state.activeBlockId }
                     if (active != null && active.text.isNotBlank()) {
                         selection = SelectionInfo(active.id, 0, active.text.length, active.text)
@@ -649,7 +676,11 @@ fun EditorScreen(
             onGenerate = { aiViewModel.generate(state.revision, viewModel.contentHash()) },
             onOverflowRetry = {
                 val actionId = aiState.action?.id ?: AiActions.CONTINUE
-                val selection = if (actionId == AiActions.REWRITE) pendingSelection else null
+                val selection = if (actionId == AiActions.REWRITE || actionId == AiActions.EXPAND) {
+                    pendingSelection
+                } else {
+                    null
+                }
                 aiViewModel.prepare(actionId, state.blocks, state.activeBlockId, selection, allowOverflow = true)
             },
             onCancel = { aiViewModel.cancel() },
@@ -722,7 +753,7 @@ fun EditorScreen(
                     viewModel.activate(state.blocks.getOrNull(index)?.id ?: "", 0)
                 }
             },
-            // 改字数/勾掉设定后立刻按新配置重新装配上下文（预览马上跟着变）
+            // 改字数/范围/来源/勾选笔记后立刻按新配置重新装配上下文（预览马上跟着变）
             onLength = { len ->
                 aiViewModel.setLength(len)
                 reprepareAi()
@@ -732,6 +763,26 @@ fun EditorScreen(
             excludedNoteIds = aiState.excludedNoteIds,
             onToggleNote = { id ->
                 aiViewModel.toggleNote(id)
+                reprepareAi()
+            },
+            onBodyRange = { range ->
+                aiViewModel.setBodyRange(range)
+                reprepareAi()
+            },
+            onToggleBody = { on ->
+                aiViewModel.setIncludeBody(on)
+                reprepareAi()
+            },
+            onToggleOutline = { on ->
+                aiViewModel.setIncludeOutline(on)
+                reprepareAi()
+            },
+            onToggleNotes = { on ->
+                aiViewModel.setIncludeNotes(on)
+                reprepareAi()
+            },
+            onToggleAllNotes = { includeAll ->
+                aiViewModel.setNotesExcluded(aiContextNotes.map { it.id }, excluded = !includeAll)
                 reprepareAi()
             }
         )
@@ -975,76 +1026,68 @@ private fun InactiveBlock(
 }
 
 /**
- * 段落操作条：贴着「正在写的这一段」下面，四等分，位置固定。
- * 取代 0.10.0 那个浮在正文左侧、压住前两个字的小圆点——
- * 那个东西既看不见、又点不准、还挡字。
+ * 删段落的撤销条。0.12 用的是 Snackbar，压在键盘上沿的工具条和正文之间，
+ * 既盖字又和工具条重叠；这里改成工具条正上方的一条常驻内联条，4 秒后自己消失。
  */
 @Composable
-private fun ParagraphActionBar(
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-    onInsertBelow: () -> Unit,
-    onDelete: () -> Unit
+private fun UndoBar(
+    text: String,
+    onUndo: () -> Unit,
+    onDismiss: () -> Unit
 ) {
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = RoundedCornerShape(10.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+        color = MaterialTheme.colorScheme.inverseSurface,
+        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+        modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 2.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            ParagraphAction(Icons.Default.KeyboardArrowUp, "上移", canMoveUp, onMoveUp)
-            ParagraphAction(Icons.Default.KeyboardArrowDown, "下移", canMoveDown, onMoveDown)
-            ParagraphAction(Icons.Default.Add, "新段", true, onInsertBelow)
-            ParagraphAction(Icons.Default.Delete, "删除", true, onDelete, destructive = true)
+            Text(
+                text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.inverseOnSurface,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onUndo) {
+                Text("撤销", color = MaterialTheme.colorScheme.inversePrimary)
+            }
+            IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "关闭",
+                    tint = MaterialTheme.colorScheme.inverseOnSurface,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
-    }
-}
-
-@Composable
-private fun ParagraphAction(
-    icon: ImageVector,
-    label: String,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    destructive: Boolean = false
-) {
-    val tint = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(enabled = enabled, onClick = onClick)
-            .alpha(if (enabled) 1f else 0.35f)
-            .padding(horizontal = 10.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(4.dp))
-        Text(label, style = MaterialTheme.typography.labelMedium, color = tint)
     }
 }
 
 /**
  * 键盘上方的工具条：六个等宽触控块，贴住输入法上沿。
+ *
+ * 0.13 的改动：
+ * - 删掉「收起」按钮：工具条本来就跟着键盘走，键盘一收它自己就没意义了，
+ *   那个按钮唯一的作用是让功能消失，用户完全猜不到它要干什么；
+ * - 删掉「换章」「笔记」：换章入口收敛到标题（唯一入口），笔记在顶栏；
+ * - 加进「上移 / 下移 / 删除」：段落操作条不再插在正文里把正文往上挤，
+ *   段落的增删移和文字操作统一在这一条上，正文区域永远是纯文字。
  */
 @Composable
 private fun EditorToolbar(
     undoAvailable: Boolean,
     redoAvailable: Boolean,
     hasActiveBlock: Boolean,
-    notesEnabled: Boolean,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
     onAdd: () -> Unit,
-    onChapterList: () -> Unit,
-    onNotes: () -> Unit,
-    onHideKeyboard: () -> Unit
+    onDelete: () -> Unit
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -1054,25 +1097,20 @@ private fun EditorToolbar(
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
+            // 不再 navigationBarsPadding：外层 Scaffold 的 innerPadding 已经把导航栏算进去了，
+            // 这里再加一次就是双计（工具条会浮在导航栏上方一大截，和键盘一起把正文挤没）。
             modifier = Modifier
                 .fillMaxWidth()
-                .navigationBarsPadding()
                 .padding(horizontal = 4.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
             ToolbarAction(painterResource(R.drawable.ic_undo), "撤销", undoAvailable, onUndo, Modifier.weight(1f))
             ToolbarAction(painterResource(R.drawable.ic_redo), "重做", redoAvailable, onRedo, Modifier.weight(1f))
+            ToolbarAction(Icons.Default.KeyboardArrowUp, "上移", canMoveUp, onMoveUp, Modifier.weight(1f))
+            ToolbarAction(Icons.Default.KeyboardArrowDown, "下移", canMoveDown, onMoveDown, Modifier.weight(1f))
             ToolbarAction(Icons.Default.Add, "新段", hasActiveBlock, onAdd, Modifier.weight(1f))
-            ToolbarAction(Icons.Default.List, "换章", true, onChapterList, Modifier.weight(1f))
-            ToolbarAction(
-                painterResource(R.drawable.ic_notes),
-                "笔记",
-                notesEnabled,
-                onNotes,
-                Modifier.weight(1f)
-            )
-            ToolbarAction(Icons.Default.KeyboardArrowDown, "收起", true, onHideKeyboard, Modifier.weight(1f))
+            ToolbarAction(Icons.Default.Delete, "删段", hasActiveBlock, onDelete, Modifier.weight(1f))
         }
     }
 }
@@ -1424,82 +1462,125 @@ private class BlockEditText(context: Context) : EditText(context) {
 }
 
 /**
- * 换章侧栏：从右侧滑出，遮罩点击关闭；点章节直接在编辑里切换。
- * 原来走的是「点标题/工具条 → 底部弹层 → 点章节」，三步太多。
+ * 章节面板（唯一入口）：底部弹层。
+ *
+ * 为什么从「右侧滑出侧栏」换成底部弹层：
+ * 1) 右边缘全屏侧栏和 Android 10+ 的全面屏左右边缘返回手势抢同一片热区，
+ *    系统手势优先，用户想拉侧栏结果退出编辑器；靠 systemGestureExclusion 也救不回来
+ *    （每条边最多 200dp，且系统手势仍然优先）；
+ * 2) 底部弹层是纵向手势，和边缘手势零重叠，还能被拖拽关闭；
+ * 3) 顺手把「下一章 / 新建下一章」「作品目录」「本章大纲」放进同一个面板，
+ *    用户不用先退出编辑器再找目录。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ChapterPickerOverlay(
-    chapters: List<com.creativeworkbench.writer.core.data.ChapterEntity>,
+private fun ChapterSheet(
+    workTitle: String,
+    chapters: List<ChapterEntity>,
     currentChapterId: String,
+    nextChapter: ChapterEntity?,
     onPick: (String) -> Unit,
+    onOpenDirectory: () -> Unit,
+    onOpenOutline: () -> Unit,
+    onCreateNext: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    var shown by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { shown = true }
-    Box(Modifier.fillMaxSize()) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.35f))
-                .clickable { onDismiss() }
-        )
-        AnimatedVisibility(
-            visible = shown,
-            enter = slideInHorizontally(tween(Motion.Medium)) { it },
-            exit = slideOutHorizontally(tween(Motion.Fast)) { it },
-            modifier = Modifier.align(Alignment.CenterEnd)
-        ) {
-            androidx.compose.material3.Surface(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .fillMaxWidth(0.78f),
-                color = MaterialTheme.colorScheme.surface,
-                shadowElevation = 12.dp
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val currentIndex = chapters.indexOfFirst { it.id == currentChapterId }
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding()) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(Modifier.fillMaxSize().navigationBarsPadding()) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 16.dp, bottom = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("章节", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                        TextButton(onClick = onDismiss) { Text("关闭") }
-                    }
+                Column(Modifier.weight(1f)) {
+                    Text("章节", style = MaterialTheme.typography.titleLarge)
                     Text(
-                        "共 " + chapters.size + " 章 · 点一下直接编辑",
+                        workTitle.ifBlank { "作品" } + " · " +
+                            (if (currentIndex >= 0) "第 " + (currentIndex + 1) + " 章" else "未定位") +
+                            " / 共 " + chapters.size + " 章",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Spacer(Modifier.height(6.dp))
-                    LazyColumn(Modifier.fillMaxSize()) {
-                        items(chapters, key = { it.id }) { chapter ->
-                            val current = chapter.id == currentChapterId
-                            Surface(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { if (!current) onPick(chapter.id) }
-                                    .padding(horizontal = 12.dp, vertical = 2.dp),
-                                shape = MaterialTheme.shapes.small,
-                                color = if (current) MaterialTheme.colorScheme.primaryContainer
-                                else MaterialTheme.colorScheme.surface
-                            ) {
-                                Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                                    Text(
-                                        chapter.title,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal
-                                    )
-                                    Text(
-                                        chapter.wordCount.toString() + " 字" + (if (current) " · 正在写" else ""),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
+                }
+                TextButton(onClick = onDismiss) { Text("关闭") }
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (nextChapter != null) {
+                    PillButton(
+                        text = "下一章 · " + nextChapter.title,
+                        onClick = { onPick(nextChapter.id) }
+                    )
+                } else {
+                    PillButton(
+                        text = "新建下一章",
+                        icon = Icons.Default.Add,
+                        onClick = onCreateNext
+                    )
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                GhostButton(text = "作品目录", onClick = onOpenDirectory)
+                GhostButton(text = "本章大纲", onClick = onOpenOutline)
+            }
+            if (nextChapter != null) {
+                TextButton(
+                    onClick = onCreateNext,
+                    modifier = Modifier.padding(start = 12.dp)
+                ) { Text("在末尾新建一章") }
+            }
+            Spacer(Modifier.height(6.dp))
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
+                items(chapters, key = { it.id }) { chapter ->
+                    val current = chapter.id == currentChapterId
+                    Surface(
+                        onClick = { if (!current) onPick(chapter.id) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 2.dp),
+                        shape = MaterialTheme.shapes.small,
+                        color = if (current) MaterialTheme.colorScheme.primaryContainer
+                        else MaterialTheme.colorScheme.surface
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                ((chapters.indexOfFirst { it.id == chapter.id }) + 1).toString(),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.width(28.dp)
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    chapter.title,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal
+                                )
+                                Text(
+                                    chapter.wordCount.toString() + " 字" + (if (current) " · 正在写" else ""),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
                     }
                 }
             }
+            Spacer(Modifier.height(16.dp))
         }
     }
 }

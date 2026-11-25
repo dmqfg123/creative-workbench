@@ -33,28 +33,60 @@ data class AiUsage(
      */
     fun estimatedCostCny(): Double =
         (cacheMissTokens * 2.13 + cacheHitTokens * 0.043 + completionTokens * 8.52) / 1_000_000.0
+
+    operator fun plus(other: AiUsage?): AiUsage {
+        if (other == null) return this
+        return AiUsage(
+            promptTokens = promptTokens + other.promptTokens,
+            completionTokens = completionTokens + other.completionTokens,
+            cacheHitTokens = cacheHitTokens + other.cacheHitTokens,
+            cacheMissTokens = cacheMissTokens + other.cacheMissTokens
+        )
+    }
 }
 
 sealed interface AiCallResult {
-    data class Ok(val content: String, val usage: AiUsage? = null) : AiCallResult
+    data class Ok(
+        val content: String,
+        val usage: AiUsage? = null,
+        /** "stop" 正常结束；"length" 撞到 max_tokens 被截断（要续写拼接）。 */
+        val finishReason: String? = null
+    ) : AiCallResult {
+        val truncated: Boolean get() = finishReason == "length"
+    }
+
     data class Error(val message: String) : AiCallResult
 }
 
 /**
+ * 流式回调：正文增量与「思考中」增量分开给。
+ * 思考模式下前端等十几秒没动静是最伤的体验，至少要能显示「正在思考…」。
+ */
+data class AiStreamHooks(
+    val onDelta: (String) -> Unit = {},
+    val onReasoning: (String) -> Unit = {}
+)
+
+/**
  * OpenAI 兼容的 chat/completions 客户端。
- * 不流式、不重试；超时由配置决定；http 只有在设置里显式允许时才放行。
+ * 默认流式（SSE）：首字 1–2 秒就出来，用户不用盯十几秒的「生成中…」。
+ * 取消协程会真的 cancel OkHttp Call，连接断掉、不再计费。
  */
 class AiClient {
     suspend fun chat(
         config: AiConfig,
         apiKey: String,
         messages: List<ChatMessage>,
-        tuning: ActionTuning = ActionTuning()
+        tuning: ActionTuning = ActionTuning(),
+        hooks: AiStreamHooks? = null,
+        /** 声明 DeepSeek 服务端联网工具：模型自己决定搜不搜，搜索在服务端跑。 */
+        webSearch: Boolean = false
     ): AiCallResult = withContext(Dispatchers.IO) {
         val endpoint = endpointFor(config)
             ?: return@withContext AiCallResult.Error("Base URL 不合法：只支持 https；打开「允许明文 HTTP」后才允许 http")
         val params = config.profile.request(tuning, config.deepThinking)
-        val payload = buildPayload(config, tuning, messages)
+        val stream = hooks != null
+        val payload = buildPayload(config, tuning, messages, stream, webSearch)
 
         val timeout = params.timeoutSeconds.toLong()
         val client = OkHttpClient.Builder()
@@ -77,31 +109,78 @@ class AiClient {
         val cancelHandle = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
             ?.invokeOnCompletion { call.cancel() }
         try {
-        runCatching {
-            call.execute().use { response ->
-                val body = response.body?.string().orEmpty()
-                if (!response.isSuccessful) {
-                    return@withContext AiCallResult.Error(describeHttpError(response.code, body))
-                }
-                val parsed = JSONObject(body)
-                val choice = parsed.optJSONArray("choices")?.optJSONObject(0)
-                val content = choice?.optJSONObject("message")?.optString("content").orEmpty()
-                if (content.isBlank()) {
-                    if (choice?.optString("finish_reason") == "length") {
-                        AiCallResult.Error("输出被截断：这次思考把额度用完了。重试一次，或先关掉「深度思考」。")
-                    } else {
-                        AiCallResult.Error("模型返回为空")
+            runCatching {
+                call.execute().use { response ->
+                    if (!response.isSuccessful) {
+                        val body = response.body?.string().orEmpty()
+                        return@withContext AiCallResult.Error(describeHttpError(response.code, body))
                     }
-                } else {
-                    AiCallResult.Ok(content.trim(), parseUsage(parsed.optJSONObject("usage")))
+                    if (stream) {
+                        readStream(response, hooks!!)
+                    } else {
+                        readOnce(response)
+                    }
                 }
+            }.getOrElse { error ->
+                AiCallResult.Error("网络错误：" + (error.message ?: error.javaClass.simpleName))
             }
-        }.getOrElse { error ->
-            AiCallResult.Error("网络错误：" + (error.message ?: error.javaClass.simpleName))
-        }
         } finally {
             cancelHandle?.dispose()
         }
+    }
+
+    private fun readOnce(response: okhttp3.Response): AiCallResult {
+        val body = response.body?.string().orEmpty()
+        val parsed = runCatching { JSONObject(body) }.getOrNull()
+            ?: return AiCallResult.Error("返回内容不是合法 JSON（前 120 字）：" + body.take(120))
+        val choice = parsed.optJSONArray("choices")?.optJSONObject(0)
+        val content = choice?.optJSONObject("message")?.optString("content").orEmpty()
+        val finish = choice?.optString("finish_reason")?.takeIf { it.isNotEmpty() }
+        if (content.isBlank()) {
+            return if (finish == "length") {
+                AiCallResult.Error("输出被截断：这次思考把额度用完了。重试一次，或先关掉「深度思考」。")
+            } else {
+                AiCallResult.Error("模型返回为空")
+            }
+        }
+        return AiCallResult.Ok(content.trim(), parseUsage(parsed.optJSONObject("usage")), finish)
+    }
+
+    /** SSE：逐行读 data: {...}，把 delta.content 增量吐出去。 */
+    private fun readStream(response: okhttp3.Response, hooks: AiStreamHooks): AiCallResult {
+        val source = response.body?.source()
+            ?: return AiCallResult.Error("流式响应为空")
+        val builder = StringBuilder()
+        var finish: String? = null
+        var usage: AiUsage? = null
+        while (true) {
+            val line = source.readUtf8Line() ?: break
+            if (!line.startsWith("data:")) continue
+            val payload = line.removePrefix("data:").trim()
+            if (payload.isEmpty()) continue
+            if (payload == "[DONE]") break
+            val chunk = runCatching { JSONObject(payload) }.getOrNull() ?: continue
+            chunk.optJSONObject("usage")?.let { usage = (usage ?: AiUsage()) + parseUsage(it) }
+            val choice = chunk.optJSONArray("choices")?.optJSONObject(0) ?: continue
+            choice.optString("finish_reason").takeIf { it.isNotEmpty() }?.let { finish = it }
+            val delta = choice.optJSONObject("delta") ?: continue
+            val reasoning = delta.optString("reasoning_content")
+            if (reasoning.isNotEmpty()) hooks.onReasoning(reasoning)
+            val text = delta.optString("content")
+            if (text.isNotEmpty()) {
+                builder.append(text)
+                hooks.onDelta(text)
+            }
+        }
+        val content = builder.toString()
+        if (content.isBlank()) {
+            return if (finish == "length") {
+                AiCallResult.Error("输出被截断：这次思考把额度用完了。重试一次，或先关掉「深度思考」。")
+            } else {
+                AiCallResult.Error("模型返回为空")
+            }
+        }
+        return AiCallResult.Ok(content.trim(), usage, finish)
     }
 
     /**
@@ -111,7 +190,9 @@ class AiClient {
     internal fun buildPayload(
         config: AiConfig,
         tuning: ActionTuning,
-        messages: List<ChatMessage>
+        messages: List<ChatMessage>,
+        stream: Boolean = false,
+        webSearch: Boolean = false
     ): JSONObject {
         val profile = config.profile
         val params = profile.request(tuning, config.deepThinking)
@@ -123,7 +204,23 @@ class AiClient {
             if (profile.supportsThinking) {
                 put("thinking", JSONObject().put("type", if (params.thinking) "enabled" else "disabled"))
             }
-            put("stream", false)
+            put("stream", stream)
+            // 流式默认不带 usage；DeepSeek 支持 include_usage，带上才能显示缓存命中与花费。
+            if (stream && profile.supportsThinking) {
+                put("stream_options", JSONObject().put("include_usage", true))
+            }
+            // 服务端联网：只声明工具，客户端不执行任何东西；模型自己决定搜不搜，
+            // 搜索和抓取都在 DeepSeek 服务端跑，结果以引用形式回到正文里。
+            // 注意 tool_choice 不能点名这两个工具，否则 400。
+            if (webSearch && profile.supportsThinking) {
+                put(
+                    "tools",
+                    JSONArray().apply {
+                        put(JSONObject().put("type", "deepseek_web_search"))
+                        put(JSONObject().put("type", "deepseek_read_url"))
+                    }
+                )
+            }
             put("messages", JSONArray().apply {
                 messages.forEach { message ->
                     put(JSONObject().put("role", message.role).put("content", message.content))

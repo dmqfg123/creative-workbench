@@ -2,6 +2,7 @@ package com.creativeworkbench.writer.core.data
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 /**
@@ -26,6 +27,15 @@ class NoteRepository(private val db: WorkbenchDatabase) {
     }
 
     suspend fun delete(id: String) = withContext(Dispatchers.IO) { db.noteDao().delete(id) }
+
+    /** 批量删除（笔记多选/按日期整组删）。一次 SQL，不做 N 次单删。 */
+    suspend fun deleteAll(ids: Collection<String>) = withContext(Dispatchers.IO) {
+        if (ids.isEmpty()) return@withContext
+        ids.chunked(400).forEach { db.noteDao().deleteByIds(it) }
+    }
+
+    /** 一次性取全部笔记（AI 装配上下文用，不走 Flow）。 */
+    suspend fun allOnce(): List<NoteEntity> = withContext(Dispatchers.IO) { db.noteDao().listAll() }
 
     suspend fun replaceAll(notes: List<NoteEntity>) = withContext(Dispatchers.IO) {
         db.noteDao().deleteAll()

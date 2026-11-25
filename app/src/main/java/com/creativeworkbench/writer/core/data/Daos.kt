@@ -66,6 +66,9 @@ interface NoteDao {
     @Query("SELECT * FROM notes WHERE workId IS NULL OR workId = :workId ORDER BY pinned DESC, updatedAtMs DESC")
     fun observeForWork(workId: String?): Flow<List<NoteEntity>>
 
+    @Query("SELECT * FROM notes ORDER BY pinned DESC, updatedAtMs DESC")
+    suspend fun listAll(): List<NoteEntity>
+
     @Query("SELECT * FROM notes WHERE id = :id")
     suspend fun byId(id: String): NoteEntity?
 
@@ -81,14 +84,57 @@ interface NoteDao {
     @Query("UPDATE notes SET aiReference = :value, updatedAtMs = :now WHERE id = :id")
     suspend fun setAiReference(id: String, value: Boolean, now: Long)
 
+    @Query("SELECT * FROM notes WHERE workId = :workId")
+    suspend fun listByWork(workId: String): List<NoteEntity>
+
     @Query("DELETE FROM notes WHERE workId = :workId")
     suspend fun deleteByWork(workId: String)
+
+    /**
+     * 删作品时把笔记摘下来，而不是删掉：笔记（尤其人物/设定）是跨作品复用的资产，
+     * 用户明确要求「删书本不删笔记」。workId 置空后它们出现在「全部作品」里。
+     */
+    @Query("UPDATE notes SET workId = NULL, updatedAtMs = :now WHERE workId = :workId")
+    suspend fun detachFromWork(workId: String, now: Long)
+
+    @Query("DELETE FROM notes WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<String>)
 
     @Query("DELETE FROM notes WHERE id = :id")
     suspend fun delete(id: String)
 
     @Query("DELETE FROM notes")
     suspend fun deleteAll()
+}
+
+@Dao
+interface OutlineDao {
+    @Query("SELECT * FROM outline_nodes WHERE workId = :workId ORDER BY orderIndex ASC")
+    fun observeByWork(workId: String): Flow<List<OutlineNodeEntity>>
+
+    @Query("SELECT * FROM outline_nodes WHERE workId = :workId ORDER BY orderIndex ASC")
+    suspend fun listByWork(workId: String): List<OutlineNodeEntity>
+
+    @Query("SELECT * FROM outline_nodes WHERE id = :id")
+    suspend fun byId(id: String): OutlineNodeEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(node: OutlineNodeEntity)
+
+    @Query("DELETE FROM outline_nodes WHERE id = :id")
+    suspend fun delete(id: String)
+
+    @Query("DELETE FROM outline_nodes WHERE workId = :workId")
+    suspend fun deleteByWork(workId: String)
+
+    @Query("DELETE FROM outline_nodes WHERE chapterId = :chapterId")
+    suspend fun deleteByChapter(chapterId: String)
+
+    @Query("SELECT COALESCE(MAX(orderIndex), -1) FROM outline_nodes WHERE workId = :workId")
+    suspend fun maxOrder(workId: String): Int
+
+    @Query("SELECT COUNT(*) FROM outline_nodes WHERE workId = :workId")
+    suspend fun countByWork(workId: String): Int
 }
 
 @Dao

@@ -30,6 +30,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.creativeworkbench.writer.ui.screens.AiChatScreen
 import com.creativeworkbench.writer.ui.screens.AiHistoryScreen
 import com.creativeworkbench.writer.ui.screens.AiSettingsScreen
 import com.creativeworkbench.writer.ui.screens.DataSettingsScreen
@@ -40,6 +41,7 @@ import com.creativeworkbench.writer.ui.screens.LibraryScreen
 import com.creativeworkbench.writer.ui.screens.MoreScreen
 import com.creativeworkbench.writer.ui.screens.NoteDetailScreen
 import com.creativeworkbench.writer.ui.screens.NotesScreen
+import com.creativeworkbench.writer.ui.screens.OutlineScreen
 import com.creativeworkbench.writer.ui.theme.CreativeWorkbenchTheme
 import com.creativeworkbench.writer.ui.theme.Motion
 
@@ -67,6 +69,8 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                 route == "more/ai-history" -> "AI 调用历史"
                 route == "more/modules" -> "模块与扩展"
                 route == "more/data" -> "数据与备份"
+                route == "chat" -> "AI 对话"
+                route?.startsWith("outline/") == true -> "大纲"
                 else -> route.orEmpty()
             }
         )
@@ -94,7 +98,7 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
         Scaffold(
             snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
-                if (route == "library" || route == "notes" || route == "more") {
+                if (route == "library" || route == "notes" || route == "more" || route == "chat") {
                     BottomBar(
                         navController = navController,
                         route = route,
@@ -156,7 +160,8 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                         onFilterConsumed = viewModel::consumeNotesFilter,
                         onOpenNote = { noteId -> navController.navigate("note/" + noteId + "/" + "") },
                         onNewNote = { kind -> navController.navigate("note/new/" + kind) },
-                        onOpenLibrary = { navController.navigateSingleTop("library") }
+                        onOpenLibrary = { navController.navigateSingleTop("library") },
+                        onDeleteNotes = { ids -> viewModel.deleteNotes(ids) }
                     )
                 }
                 composable("note/{noteId}/{kind}") { entry ->
@@ -166,6 +171,20 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                         noteId = noteId,
                         workId = viewModel.appState.collectAsStateWithLifecycle().value.currentWorkId,
                         kind = kind,
+                        onBack = { navController.popBackStack() }
+                    )
+                }
+                composable("chat") {
+                    val currentId = viewModel.appState.collectAsStateWithLifecycle().value.currentWorkId
+                    val title = viewModel.works.collectAsStateWithLifecycle().value
+                        .firstOrNull { it.id == currentId }?.title.orEmpty()
+                    AiChatScreen(workId = currentId, workTitle = title)
+                }
+                composable("outline/{workId}") { entry ->
+                    val workId = entry.arguments?.getString("workId").orEmpty()
+                    OutlineScreen(
+                        workId = workId,
+                        highlightChapterId = appState.currentChapterId,
                         onBack = { navController.popBackStack() }
                     )
                 }
@@ -221,7 +240,10 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                             viewModel.setCurrentChapter(workId, chapterId)
                             navController.navigate("editor/" + workId + "/" + chapterId)
                         },
-                        onBack = { navController.popBackStack() }
+                        onBack = { navController.popBackStack() },
+                        onOpenOutline = { outlineWorkId ->
+                            navController.navigate("outline/" + outlineWorkId)
+                        }
                     )
                 }
                 composable(
@@ -273,6 +295,9 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                             navController.navigate("directory/" + workId) {
                                 popUpTo("editor/{workId}/{chapterId}") { inclusive = true }
                             }
+                        },
+                        onOpenOutline = {
+                            navController.navigate("outline/" + workId)
                         }
                     )
                 }
@@ -298,6 +323,17 @@ private fun BottomBar(navController: NavHostController, route: String?, notesEna
                 label = { Text("笔记") }
             )
         }
+        NavigationBarItem(
+            selected = route == "chat",
+            onClick = { navController.navigateSingleTop("chat") },
+            icon = {
+                Icon(
+                    androidx.compose.ui.res.painterResource(com.creativeworkbench.writer.R.drawable.ic_sparkle),
+                    contentDescription = null
+                )
+            },
+            label = { Text("AI") }
+        )
         NavigationBarItem(
             selected = route == "more",
             onClick = { navController.navigateSingleTop("more") },

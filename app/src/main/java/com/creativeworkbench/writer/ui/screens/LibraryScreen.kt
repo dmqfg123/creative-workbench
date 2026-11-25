@@ -334,7 +334,7 @@ fun LibraryScreen(
                     label = "删除作品",
                     icon = Icons.Default.Delete,
                     destructive = true,
-                    description = "5 秒内可撤销；删除前建议先导出备份",
+                    description = "只删正文与章节，笔记保留；5 秒内可撤销",
                     onClick = {
                         deleteTarget = work
                     }
@@ -348,7 +348,7 @@ fun LibraryScreen(
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
             title = { Text("删除《" + work.title + "》？") },
-            text = { Text("会删除这部作品的 " + work.chapterCount + " 章正文与日志。5 秒内可以撤销。") },
+            text = { Text("会删除这部作品的 " + work.chapterCount + " 章正文与日志。笔记会保留（摘到「全部作品」下，并打上「原·书名」标签）。5 秒内可以撤销。") },
             confirmButton = {
                 TextButton(
                     onClick = {

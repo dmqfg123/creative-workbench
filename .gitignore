@@ -11,3 +11,5 @@ keystore/
 keystore.properties
 logs/
 apk/
+# 验证截图与临时 SQL（含真实正文/测试数据 + 临时 key），不进库
+shots/

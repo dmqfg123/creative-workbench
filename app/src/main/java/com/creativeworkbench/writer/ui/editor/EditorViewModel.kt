@@ -380,6 +380,35 @@ class EditorViewModel(
         return MergedBlock(upper.text)
     }
 
+    /** 当前章之后的那一章；没有就返回 null（章节面板据此显示「新建下一章」）。 */
+    fun nextChapter(): ChapterEntity? {
+        val current = _state.value.chapters.firstOrNull { it.id == chapterId } ?: return null
+        return _state.value.chapters
+            .filter { it.orderIndex > current.orderIndex }
+            .minByOrNull { it.orderIndex }
+    }
+
+    /**
+     * 新建下一章并回调新 id：章节面板的「新建下一章」。
+     * 先把当前章落盘，再建章，避免新章抢在当前章保存之前。
+     */
+    fun createNextChapter(onCreated: (String) -> Unit) {
+        viewModelScope.launch {
+            runCatching { repository.appendJournalBlocks(chapterId, _state.value.blocks) }
+            withTimeoutOrNull(900) { runCatching { persistNoteNow(); saveNow() } }
+            val workId = _state.value.workId.ifBlank {
+                _state.value.chapters.firstOrNull { it.id == chapterId }?.workId.orEmpty()
+            }
+            if (workId.isBlank()) return@launch
+            val title = com.creativeworkbench.writer.core.data.ChapterNaming.next(_state.value.chapters.map { it.title })
+            val created = runCatching { repository.createChapter(workId, title) }.getOrNull() ?: return@launch
+            _state.update {
+                it.copy(chapters = runCatching { repository.chapters(workId) }.getOrDefault(it.chapters))
+            }
+            onCreated(created.id)
+        }
+    }
+
     /** 编辑器内换章前先落盘：备注与正文都存住再跳。 */
     fun flushThen(action: () -> Unit) {
         viewModelScope.launch {

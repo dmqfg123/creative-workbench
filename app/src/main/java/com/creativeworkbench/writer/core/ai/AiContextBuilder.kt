@@ -1,10 +1,13 @@
 package com.creativeworkbench.writer.core.ai
 
 import com.creativeworkbench.writer.core.data.Block
+import com.creativeworkbench.writer.core.data.ChapterEntity
 import com.creativeworkbench.writer.core.data.ChapterRepository
 import com.creativeworkbench.writer.core.data.NoteEntity
 import com.creativeworkbench.writer.core.data.NoteKind
 import com.creativeworkbench.writer.core.data.NoteRepository
+import com.creativeworkbench.writer.core.data.OutlineNodeEntity
+import com.creativeworkbench.writer.core.data.OutlineRepository
 import kotlinx.coroutines.flow.first
 import java.security.MessageDigest
 
@@ -24,7 +27,9 @@ data class ContextPreview(
     val excluded: List<ContextExclusion> = emptyList(),
     val budget: Int = 0,
     val used: Int = 0,
-    val lengthChars: Int = 600
+    val lengthChars: Int = 600,
+    /** 本次实际带了哪些来源，面板上直接显示，不用猜。 */
+    val sources: List<String> = emptyList()
 )
 
 data class ContextBlock(val label: String, val tokens: Int, val cap: Int)
@@ -41,12 +46,27 @@ data class PreparedContext(
 )
 
 /**
+ * 上下文来源开关：用户要能自己决定「参考正文 / 参考大纲 / 参考笔记」。
+ * 三者都不勾时只剩任务描述——面板会拦下这种组合并给出提示。
+ */
+data class ContextOptions(
+    val lengthChars: Int = 600,
+    val excludedNoteIds: Set<String> = emptySet(),
+    val includeNoteSources: Boolean = true,
+    val includeOutline: Boolean = true,
+    val includeBody: Boolean = true,
+    val bodyRange: BodyRange = BodyRange.Whole
+)
+
+/**
  * 上下文装配只在这里做：平台负责决定读什么，AI 无权挑选。
- * 预算 = min(模型窗口, 13 万 tokens) × 60% − 本次输出上限；分槽 设定 40% / 正文 40% / 摘要 10% / 素材 10%。
+ * 预算 = min(模型窗口, 26 万 tokens) × 60% − 本次输出上限；
+ * 分槽 设定 35% / 正文 35% / 大纲 10% / 摘要 10% / 素材 10%。
  */
 class AiContextBuilder(
     private val chapters: ChapterRepository,
-    private val noteRepository: NoteRepository
+    private val noteRepository: NoteRepository,
+    private val outlineRepository: OutlineRepository
 ) {
     suspend fun prepare(
         action: AiActionSpec,
@@ -58,10 +78,7 @@ class AiContextBuilder(
         selection: SelectionInfo?,
         allowSettingOverflow: Boolean,
         instructionOverride: String? = null,
-        /** 续写目标字数；只影响提示词里的长度要求（输出上限在 AiViewModel 按它算）。 */
-        lengthChars: Int = 600,
-        /** 用户手动勾掉的设定 id（面板里可以取消引用某条人物/设定）。 */
-        excludedNoteIds: Set<String> = emptySet()
+        options: ContextOptions = ContextOptions()
     ): PreparedContext {
         val chapterList = chapters.chapters(workId)
         val allNotes = noteRepository.observeAll().first()
@@ -69,10 +86,13 @@ class AiContextBuilder(
         val contextBudget = ContextBudget.from(config.profile)
         val budget = contextBudget.budgetTokens.coerceAtLeast(1024)
         val settingCap = contextBudget.settingCap.coerceAtLeast(1)
-        val chapterCap = contextBudget.chapterCap.coerceAtLeast(1)
+        val outlineCap = contextBudget.outlineCap.coerceAtLeast(1)
         val summaryCap = contextBudget.summaryCap.coerceAtLeast(1)
         val materialCap = contextBudget.materialCap.coerceAtLeast(1)
         val notes = mutableListOf<String>()
+        // 「检查」必须看到正文，否则什么也检查不了：勾掉正文对它无效
+        val withBody = options.includeBody || action.id == AiActions.CHECK
+        val withNotes = options.includeNoteSources
 
         // 前一章结尾 500 字：既进上下文，也用来判断设定命中。
         val currentIndex = chapterList.indexOfFirst { it.id == chapterId }
@@ -84,13 +104,17 @@ class AiContextBuilder(
         }.orEmpty()
 
         // 设定类：当前作品的全部人物/设定，强制注入。
-        val settingNotes = allNotes.filter {
-            it.workId == workId && NoteKind.setting.contains(it.kind) && it.id !in excludedNoteIds
+        val settingNotes = if (withNotes) {
+            allNotes.filter {
+                it.workId == workId && NoteKind.setting.contains(it.kind) && it.id !in options.excludedNoteIds
+            }
+        } else {
+            emptyList()
         }
         val scanText = blocks.joinToString("\n") { it.text } + "\n" + prevTail
         val injection = SettingInjector.inject(settingNotes, scanText, settingCap)
         val settingText = injection.keptText
-        if (injection.omitted.isNotEmpty() && !allowSettingOverflow) {
+        if (injection.omitted.isNotEmpty() && !allowSettingOverflow && withNotes) {
             val omittedTitles = injection.omitted.map { it.note.title }.take(6).joinToString("、")
             return PreparedContext(
                 system = "",
@@ -106,10 +130,14 @@ class AiContextBuilder(
         }
 
         // 素材类：只有显式勾选（aiReference）的才进；备忘不参与。
-        val materialNotes = allNotes.filter {
-            (it.workId == null || it.workId == workId) &&
-                NoteKind.material.contains(it.kind) && it.aiReference && it.id !in excludedNoteIds
-        }.sortedBy { it.id }
+        val materialNotes = if (withNotes) {
+            allNotes.filter {
+                (it.workId == null || it.workId == workId) &&
+                    NoteKind.material.contains(it.kind) && it.aiReference && it.id !in options.excludedNoteIds
+            }.sortedBy { it.id }
+        } else {
+            emptyList()
+        }
         val materialFit = PromptBudget.fitEntries(
             entries = materialNotes.map { it.id to SettingInjector.render(it) },
             cap = materialCap,
@@ -117,6 +145,19 @@ class AiContextBuilder(
             keepTail = false
         )
         val materialText = materialFit.text
+
+        // 大纲：本章 + 前后各一章 + 全书级节点。远处的章节只喂标题和要点，不喂正文。
+        val outlineNodes = if (options.includeOutline) {
+            runCatching { outlineRepository.list(workId) }.getOrDefault(emptyList())
+        } else {
+            emptyList()
+        }
+        val outlineEntries = renderOutline(outlineNodes, chapterList, chapterId, currentIndex)
+        val outlineFit = PromptBudget.fitEntries(outlineEntries, outlineCap, "大纲", keepTail = true)
+        val outlineText = outlineFit.text
+        if (outlineNodes.isNotEmpty() && outlineEntries.isEmpty()) {
+            notes.add("大纲有 " + outlineNodes.size + " 条，但都在本章附近之外，这次没带")
+        }
 
         // 最近 10 章摘要：空摘要不占槽；超预算从最早的一章开始整条省略。
         val summaries = chapterList
@@ -137,23 +178,31 @@ class AiContextBuilder(
         // 只有「检查」需要段落 id（结果要能跳回段落），续写/改写一律不带标记：
         // 真机实测带 [[bN]] 时模型会照抄标记，甚至吐出 XML 片段（温度 1.5 时更严重）。
         val withMarkers = action.id == AiActions.CHECK
-        val chapterFit = when (action.id) {
-            AiActions.CHECK -> PromptBudget.fitBlocks(
+        val anchorForRange = anchorIndex ?: rewriteSelectionIndex ?: blocks.lastIndex
+        // 空槽回流：设定/大纲/摘要/素材没用满的预算，全部让给正文。
+        // 按死比例切（各 35%）会把「大纲只有 3 条」的剩余额度白白扔掉，
+        // 而正文恰恰是最该多带的那一块。
+        val usedByOthers = injection.usedTokens + outlineFit.tokens + summaryFit.tokens + materialFit.tokens
+        val chapterCap = (budget - usedByOthers).coerceAtLeast((budget * 0.35).toInt())
+        val chapterFit = when {
+            !withBody -> PromptBudget.fitBlocks(emptyList(), emptyList(), chapterCap, null, markers = false)
+            action.id == AiActions.CHECK -> PromptBudget.fitBlocks(
                 blocks, checkIndices(blocks, anchorIndex), chapterCap, anchorIndex, markers = true
             )
             // 选中段单独作为【选中文字】发一次，正文窗口里要把它排除，否则同一段算两遍、白花 token
-            AiActions.REWRITE -> PromptBudget.fitBlocks(
+            action.id == AiActions.REWRITE || action.id == AiActions.EXPAND -> PromptBudget.fitBlocks(
                 blocks,
-                rewriteIndices(blocks, selection).filter { it != rewriteSelectionIndex },
+                rangedIndices(blocks, rewriteIndices(blocks, selection), options.bodyRange, anchorForRange)
+                    .filter { it != rewriteSelectionIndex },
                 chapterCap,
                 null,
                 markers = false
             )
             else -> PromptBudget.fitBlocks(
                 blocks,
-                blocks.indices.toList(),
+                rangedIndices(blocks, blocks.indices.toList(), options.bodyRange, anchorForRange),
                 chapterCap,
-                anchorIndex ?: blocks.lastIndex,
+                anchorForRange,
                 markers = withMarkers
             )
         }
@@ -162,6 +211,11 @@ class AiContextBuilder(
         val chapterChars = blocks.sumOf { it.text.length }
         if (action.id == AiActions.CHECK && chapterChars > 15000) {
             notes.add("本次只检查当前段及前后各 2 段（约 " + chapterText.length + " 字），不是全书检查")
+        }
+        if (!withBody) {
+            notes.add("已关闭「参考正文」：只按大纲与笔记写，模型不知道你前文原句")
+        } else if (options.bodyRange.radius != null && action.id != AiActions.CHECK) {
+            notes.add("正文只带" + options.bodyRange.label + "（" + chapterText.length + " 字），省 token 也更聚焦")
         }
         if (injection.omitted.isNotEmpty()) {
             notes.add(
@@ -176,6 +230,10 @@ class AiContextBuilder(
 
         val user = buildString {
             appendLine("【作品】" + (chapters.work(workId)?.title ?: ""))
+            if (outlineText.isNotBlank()) {
+                appendLine("【大纲（本章及前后章）】")
+                appendLine(outlineText)
+            }
             if (settingText.isNotBlank()) {
                 appendLine("【设定（强制注入，共 " + injection.kept.size + " 条）】")
                 appendLine(settingText)
@@ -194,8 +252,10 @@ class AiContextBuilder(
                 appendLine("【前一章结尾】")
                 appendLine(prevTail)
             }
-            appendLine(if (withMarkers) "【当前章（每段前的 [[id]] 是段落标记）】" else "【当前章】")
-            appendLine(chapterText)
+            if (withBody) {
+                appendLine(if (withMarkers) "【当前章（每段前的 [[id]] 是段落标记）】" else "【当前章】")
+                appendLine(chapterText)
+            }
             if (anchorIndex != null && action.id == AiActions.CONTINUE) {
                 // 续写位置写成独立一行：正文本身保持与上次调用逐字一致，缓存才命中
                 appendLine("【续写位置】接在上面最后一段之后。")
@@ -205,16 +265,20 @@ class AiContextBuilder(
                 appendLine(selection.text)
             }
             appendLine("【任务】")
-            append(instructionOverride?.takeIf { it.isNotBlank() } ?: actionInstruction(action, selection, lengthChars))
+            append(
+                instructionOverride?.takeIf { it.isNotBlank() }
+                    ?: actionInstruction(action, selection, options.lengthChars)
+            )
         }
 
         val settingChars = settingText.length
-        val summaryLine = "正文 " + chapterText.length + " 字 · 设定 " +
-            injection.kept.size + " 条 " + settingChars + " 字 · 摘要 " +
+        val summaryLine = "正文 " + chapterText.length + " 字 · 大纲 " + outlineFit.kept +
+            " 条 · 设定 " + injection.kept.size + " 条 " + settingChars + " 字 · 摘要 " +
             summaries.size + " 条 · 素材 " + materialNotes.size + " 条"
         val blocksBudget = listOf(
             ContextBlock("设定", injection.usedTokens, settingCap),
             ContextBlock("正文", chapterFit.tokens, chapterCap),
+            ContextBlock("大纲", outlineFit.tokens, outlineCap),
             ContextBlock("摘要", summaryFit.tokens, summaryCap),
             ContextBlock("素材", materialFit.tokens, materialCap),
             ContextBlock("前一章尾", TokenEstimator.estimate(prevTail), TokenEstimator.estimate(prevTail))
@@ -224,11 +288,15 @@ class AiContextBuilder(
                 add(ContextExclusion("设定", ExclusionReason.BeyondBudget, hit.note.title, hit.tokens))
             }
             addAll(chapterFit.dropped)
+            addAll(outlineFit.dropped)
             addAll(summaryFit.dropped)
             addAll(materialFit.dropped)
         }
         if (chapterFit.dropped.isNotEmpty()) {
             notes.add("正文超预算，已去掉最早 " + chapterFit.dropped.size + " 段（整段省略，没有截半句）")
+        }
+        if (outlineFit.dropped.isNotEmpty()) {
+            notes.add("大纲超预算，省略了 " + outlineFit.dropped.size + " 条")
         }
         if (summaryFit.dropped.isNotEmpty()) {
             notes.add("摘要超预算，省略了 " + summaryFit.dropped.size + " 章：" +
@@ -236,6 +304,12 @@ class AiContextBuilder(
         }
         if (materialFit.dropped.isNotEmpty()) {
             notes.add("素材超预算，省略了 " + materialFit.dropped.size + " 条")
+        }
+
+        val sources = buildList {
+            if (withBody) add("正文")
+            if (outlineText.isNotBlank()) add("大纲")
+            if (settingText.isNotBlank() || materialText.isNotBlank()) add("笔记")
         }
 
         return PreparedContext(
@@ -248,9 +322,45 @@ class AiContextBuilder(
                 excluded = dropped,
                 budget = budget,
                 used = blocksBudget.sumOf { it.tokens },
-                lengthChars = lengthChars
+                lengthChars = options.lengthChars,
+                sources = sources
             )
         )
+    }
+
+    /**
+     * 只喂「本章 + 前后各一章 + 全书级」节点：
+     * 全量大纲会把 token 全烧在跟这章无关的远处剧情上；太少又接不上前后。
+     */
+    private fun renderOutline(
+        nodes: List<OutlineNodeEntity>,
+        chapterList: List<ChapterEntity>,
+        chapterId: String,
+        currentIndex: Int
+    ): List<Pair<String, String>> {
+        if (nodes.isEmpty()) return emptyList()
+        val nearby = setOf(
+            chapterList.getOrNull(currentIndex - 1)?.id,
+            chapterId,
+            chapterList.getOrNull(currentIndex + 1)?.id
+        ).filterNotNull().toSet()
+        val orderOf = chapterList.withIndex().associate { it.value.id to it.index }
+        return nodes
+            .filter { node -> node.chapterId == null || node.chapterId in nearby }
+            .sortedWith(
+                compareBy(
+                    { it.chapterId?.let { id -> orderOf[id] ?: Int.MAX_VALUE } ?: -1 },
+                    { it.orderIndex }
+                )
+            )
+            .map { node ->
+                val chapterLabel = node.chapterId?.let { id ->
+                    val index = chapterList.indexOfFirst { it.id == id }
+                    if (index >= 0) "第 " + (index + 1) + " 章 " else ""
+                } ?: ""
+                val head = node.title + if (node.content.isNotBlank()) "：" + node.content else ""
+                ("大纲·" + node.title) to ("· " + chapterLabel + head)
+            }
     }
 
     /** 段落标记名，和正文里的 [[bN]] 对齐。 */
@@ -267,6 +377,10 @@ class AiContextBuilder(
         AiActions.REWRITE ->
             "改写【选中文字】这一段，保持情节和信息不变，长度接近原文。" +
                 "只输出改写后的正文，不要任何标记、编号、标题或说明。"
+        AiActions.EXPAND ->
+            "把【选中文字】扩写到约 " + lengthChars + " 字：补细节、动作、感官、心理，" +
+                "不要新增情节事件，不要改变人物关系和走向。" +
+                "只输出扩写后的正文，不要任何标记、编号、标题或说明。"
         AiActions.CHECK ->
             "检查【当前章】，输出严格 JSON（不要代码围栏）：" +
                 "{\"issues\":[{\"blockId\":\"段落 id\",\"excerpt\":\"原文片段\",\"severity\":\"low|medium|high\",\"message\":\"问题说明\"}]}。" +
@@ -287,6 +401,18 @@ class AiContextBuilder(
         if (selection == null) return blocks.indices.toList()
         val index = blocks.indexOfFirst { it.id == selection.blockId }.takeIf { it >= 0 } ?: 0
         return ((index - 5).coerceAtLeast(0)..(index + 5).coerceAtMost(blocks.lastIndex)).toList()
+    }
+
+    /** 用户在面板里选的正文范围：整章不动，其余按光标段前后各 N 段裁。 */
+    private fun rangedIndices(
+        blocks: List<Block>,
+        base: List<Int>,
+        range: BodyRange,
+        anchorIndex: Int
+    ): List<Int> {
+        val radius = range.radius ?: return base
+        val allowed = ((anchorIndex - radius).coerceAtLeast(0)..(anchorIndex + radius).coerceAtMost(blocks.lastIndex)).toSet()
+        return base.filter { it in allowed }
     }
 
     fun contentHash(blocks: List<Block>): String {

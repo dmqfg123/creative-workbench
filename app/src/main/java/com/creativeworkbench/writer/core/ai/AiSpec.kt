@@ -10,6 +10,18 @@ enum class ActionWhen { Always, HasSelection, NoSelection, ChapterNotEmpty }
 enum class ActionSource { Builtin, Imported }
 
 /**
+ * 正文要带多少给 AI。用户抱怨「不能选引用多少正文」——
+ * 续写/改写时按这个裁，整章之外都能省 token 也更聚焦。
+ * radius 是「光标段前后各 N 段」，null = 整章。
+ */
+enum class BodyRange(val label: String, val shortLabel: String, val radius: Int?) {
+    Whole("整章正文", "整章", null),
+    Around5("光标前后 5 段", "±5 段", 5),
+    Around15("光标前后 15 段", "±15 段", 15),
+    Around40("光标前后 40 段", "±40 段", 40)
+}
+
+/**
  * 单个动作的请求策略。字段为 null 时跟随全局（AiConfig.deepThinking / ModelProfile）。
  * 有了它，「续写」可以只给 4K 输出、「检查」的 JSON 给 6K，而不是所有动作共用一刀切的上限。
  */
@@ -155,8 +167,11 @@ data class ContextBudget(
     val reservedOutputTokens: Int = 2048
 ) {
     val budgetTokens: Int get() = (windowTokens * ratio).toInt() - reservedOutputTokens
-    val settingCap: Int get() = (budgetTokens * 0.40).toInt()
-    val chapterCap: Int get() = (budgetTokens * 0.40).toInt()
+    // 五槽加起来正好 100%：设定 / 正文 / 大纲 / 摘要 / 素材。
+    // 大纲占 10%：一份 200 条要点的大纲也就一万多字，10% 足够，抢不动正文。
+    val settingCap: Int get() = (budgetTokens * 0.35).toInt()
+    val chapterCap: Int get() = (budgetTokens * 0.35).toInt()
+    val outlineCap: Int get() = (budgetTokens * 0.10).toInt()
     val summaryCap: Int get() = (budgetTokens * 0.10).toInt()
     val materialCap: Int get() = (budgetTokens * 0.10).toInt()
 

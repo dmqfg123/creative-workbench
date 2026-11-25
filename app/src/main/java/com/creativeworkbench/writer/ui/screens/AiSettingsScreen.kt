@@ -38,6 +38,9 @@ import com.creativeworkbench.writer.core.ai.AiClient
 import com.creativeworkbench.writer.core.ai.AiConfig
 import com.creativeworkbench.writer.core.ai.ChatMessage
 import com.creativeworkbench.writer.core.ai.ModelCatalog
+import com.creativeworkbench.writer.core.ai.SearchProvider
+import com.creativeworkbench.writer.core.ai.WebSearchClient
+import com.creativeworkbench.writer.core.ai.WebSearchOutcome
 import com.creativeworkbench.writer.ui.design.ChipRow
 import com.creativeworkbench.writer.ui.design.GhostButton
 import com.creativeworkbench.writer.ui.design.IconAction
@@ -63,6 +66,10 @@ fun AiSettingsScreen(onBack: () -> Unit) {
     var deepThinking by remember { mutableStateOf(initial.deepThinking) }
     var allowCleartext by remember { mutableStateOf(initial.allowCleartextHttp) }
     var status by remember { mutableStateOf<String?>(null) }
+    var searchProvider by remember { mutableStateOf(store.searchProvider()) }
+    var searchKey by remember { mutableStateOf("") }
+    var customSearchUrl by remember { mutableStateOf(store.customSearchUrl()) }
+    var searchStatus by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
     fun currentConfig() = AiConfig(
@@ -202,6 +209,99 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                     }
                     Switch(checked = allowCleartext, onCheckedChange = { allowCleartext = it })
                 }
+            }
+
+            SectionLabel("联网搜索（AI 对话窗口用）")
+            Text(
+                "模型自己不会联网。打开对话窗口的「联网」后，App 先调这里配置的检索接口，" +
+                    "把前几条摘要塞进上下文，再让模型回答——和 SillyTavern 的外挂检索一个思路，不依赖模型厂商。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            ChipRow {
+                SearchProvider.entries.forEach { provider ->
+                    Tag(
+                        text = provider.label,
+                        active = searchProvider == provider,
+                        onClick = { searchProvider = provider }
+                    )
+                }
+            }
+            Text(
+                searchProvider.note,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 6.dp)
+            )
+            if (searchProvider.needsKey) {
+                OutlinedTextField(
+                    value = searchKey,
+                    onValueChange = { searchKey = it },
+                    label = { Text(searchProvider.label + " API Key（留空则不改）") },
+                    placeholder = { Text("当前：" + store.maskedSearchKey()) },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.small
+                )
+            }
+            if (searchProvider == SearchProvider.CUSTOM) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = customSearchUrl,
+                    onValueChange = { customSearchUrl = it },
+                    label = { Text("自定义检索地址（POST {\"query\":\"...\"}）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.small
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                GhostButton(
+                    text = "保存联网设置",
+                    onClick = {
+                        store.saveSearchProvider(searchProvider)
+                        store.saveCustomSearchUrl(customSearchUrl)
+                        if (searchKey.isNotBlank()) store.saveSearchKey(searchKey.trim())
+                        searchKey = ""
+                        searchStatus = "已保存"
+                    }
+                )
+                GhostButton(
+                    text = "测试检索",
+                    onClick = {
+                        if (searchKey.isNotBlank()) store.saveSearchKey(searchKey.trim())
+                        store.saveSearchProvider(searchProvider)
+                        store.saveCustomSearchUrl(customSearchUrl)
+                        searchKey = ""
+                        searchStatus = "检索中…"
+                        scope.launch {
+                            val outcome = WebSearchClient().search(
+                                query = "今天杭州天气",
+                                provider = searchProvider,
+                                apiKey = store.searchKey(),
+                                customUrl = store.customSearchUrl()
+                            )
+                            searchStatus = when (outcome) {
+                                is WebSearchOutcome.Ok ->
+                                    "检索正常（" + outcome.provider + "）：" +
+                                        outcome.hits.first().title.take(30)
+                                is WebSearchOutcome.Error -> outcome.message
+                            }
+                        }
+                    }
+                )
+            }
+            searchStatus?.let {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             Spacer(Modifier.height(16.dp))

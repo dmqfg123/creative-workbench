@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -81,7 +82,8 @@ fun DirectoryScreen(
     workId: String,
     currentChapterId: String?,
     onOpenChapter: (String) -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onOpenOutline: (String) -> Unit = {}
 ) {
     val application = LocalContext.current.applicationContext as Application
     val viewModel: DirectoryViewModel = viewModel(
@@ -207,6 +209,11 @@ fun DirectoryScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                        IconAction(
+                            icon = Icons.Default.List,
+                            contentDescription = "本书大纲",
+                            onClick = { onOpenOutline(workId) }
+                        )
                         IconAction(
                             icon = Icons.Default.Search,
                             contentDescription = "搜索章节",
