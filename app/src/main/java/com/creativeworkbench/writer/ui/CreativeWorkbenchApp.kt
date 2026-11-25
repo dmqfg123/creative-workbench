@@ -172,7 +172,17 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                         noteId = noteId,
                         workId = viewModel.appState.collectAsStateWithLifecycle().value.currentWorkId,
                         kind = kind,
-                        onBack = { navController.popBackStack() }
+                        onBack = { navController.popBackStack() },
+                        onOpenChapter = { targetChapterId ->
+                            val work = viewModel.works.value.firstOrNull { work ->
+                                work.id == viewModel.appState.value.currentWorkId
+                            }
+                            val targetWork = work?.id ?: viewModel.appState.value.currentWorkId
+                            if (!targetWork.isNullOrBlank()) {
+                                viewModel.setCurrentChapter(targetWork, targetChapterId)
+                                navController.navigate("editor/" + targetWork + "/" + targetChapterId)
+                            }
+                        }
                     )
                 }
                 composable("chat") {
@@ -303,7 +313,8 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                         },
                         onOpenOutline = {
                             navController.navigate("outline/" + workId)
-                        }
+                        },
+                        onOpenNote = { noteId -> navController.navigate("note/" + noteId + "/") }
                     )
                 }
             }

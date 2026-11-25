@@ -38,7 +38,9 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.indication
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
@@ -167,7 +169,8 @@ fun EditorScreen(
     onBack: () -> Unit,
     onSwitchChapter: (String) -> Unit,
     onOpenDirectory: () -> Unit,
-    onOpenOutline: () -> Unit = {}
+    onOpenOutline: () -> Unit = {},
+    onOpenNote: (String) -> Unit = {}
 ) {
     val application = LocalContext.current.applicationContext as Application
     val app = application as WorkbenchApp
@@ -586,6 +589,11 @@ fun EditorScreen(
             chapters = state.chapters,
             currentChapterId = chapterId,
             nextChapter = viewModel.nextChapter(),
+            mentioned = com.creativeworkbench.writer.core.data.MentionIndex.scan(
+                notes.filter { it.workId == null || it.workId == workId },
+                com.creativeworkbench.writer.core.data.MentionIndex.textOf(state.blocks)
+            ),
+            onOpenNote = { noteId -> onOpenNote(noteId) },
             onPick = { target ->
                 chapterSheetOpen = false
                 keyboard?.hide()
@@ -1514,6 +1522,9 @@ private fun ChapterSheet(
     chapters: List<ChapterEntity>,
     currentChapterId: String,
     nextChapter: ChapterEntity?,
+    /** 本章正文里提到的笔记（与 AI 注入共用 MentionIndex）。 */
+    mentioned: List<com.creativeworkbench.writer.core.data.MentionIndex.Mention>,
+    onOpenNote: (String) -> Unit,
     onPick: (String) -> Unit,
     onOpenDirectory: () -> Unit,
     onOpenOutline: () -> Unit,
@@ -1575,6 +1586,30 @@ private fun ChapterSheet(
                     onClick = onCreateNext,
                     modifier = Modifier.padding(start = 12.dp)
                 ) { Text("在末尾新建一章") }
+            }
+            // 本章提到了哪些人物/设定：点一下进笔记详情。规则和 AI 注入完全相同。
+            if (mentioned.isNotEmpty()) {
+                Text(
+                    "本章提到 " + mentioned.size + " 条笔记",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 20.dp, top = 2.dp)
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 4.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    mentioned.take(12).forEach { mention ->
+                        Tag(
+                            text = mention.note.title + " ×" + mention.count,
+                            active = false,
+                            onClick = { onOpenNote(mention.note.id) }
+                        )
+                    }
+                }
             }
             Spacer(Modifier.height(6.dp))
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {

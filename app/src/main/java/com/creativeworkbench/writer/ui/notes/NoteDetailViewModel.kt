@@ -22,7 +22,11 @@ data class NoteDetailState(
     val saving: Boolean = false,
     val savedAt: Long? = null,
     /** 同作品章节：设定「从哪一章开始生效」要用。 */
-    val chapters: List<com.creativeworkbench.writer.core.data.ChapterEntity> = emptyList()
+    val chapters: List<com.creativeworkbench.writer.core.data.ChapterEntity> = emptyList(),
+    /** 这条笔记出现在哪几章（点了才扫，见 scanAppearances）。 */
+    val appearances: List<Pair<com.creativeworkbench.writer.core.data.ChapterEntity, Int>> = emptyList(),
+    val scanning: Boolean = false,
+    val scanned: Boolean = false
 )
 
 class NoteDetailViewModel(
@@ -51,6 +55,32 @@ class NoteDetailViewModel(
                 note.workId?.let { (application as WorkbenchApp).container.chapters.chapters(it) }
             }.getOrNull().orEmpty()
             _state.value = NoteDetailState(note = note, loading = false, chapters = chapters)
+        }
+    }
+
+    /**
+     * 反向索引：扫全部章节，找出这条笔记被提到的地方。
+     * 对应 novelWriter 的 getBackReferenceList / Obsidian 的 backlinks——
+     * 不建持久索引（章节文件是真相，索引容易和文件不一致），改成按需扫，
+     * 30 章 × 1 万字也只是一次线性扫描。
+     */
+    fun scanAppearances() {
+        val note = _state.value.note ?: return
+        val workId = note.workId ?: return
+        if (_state.value.scanning) return
+        _state.value = _state.value.copy(scanning = true)
+        viewModelScope.launch {
+            val chapterRepository = (getApplication() as WorkbenchApp).container.chapters
+            val chapters = _state.value.chapters
+            val found = mutableListOf<Pair<com.creativeworkbench.writer.core.data.ChapterEntity, Int>>()
+            chapters.forEach { chapter ->
+                val opened = runCatching { chapterRepository.openChapter(chapter.id) }.getOrNull() ?: return@forEach
+                val text = com.creativeworkbench.writer.core.data.MentionIndex.textOf(opened.content.blocks)
+                val count = com.creativeworkbench.writer.core.data.MentionIndex.countIn(note, text)
+                if (count > 0) found.add(chapter to count)
+            }
+            _state.value = _state.value.copy(appearances = found, scanning = false, scanned = true)
+            workId
         }
     }
 

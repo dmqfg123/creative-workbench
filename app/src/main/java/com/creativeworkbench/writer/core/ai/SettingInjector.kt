@@ -1,5 +1,6 @@
 package com.creativeworkbench.writer.core.ai
 
+import com.creativeworkbench.writer.core.data.MentionIndex
 import com.creativeworkbench.writer.core.data.NoteEntity
 import com.creativeworkbench.writer.core.data.NoteKind
 
@@ -37,9 +38,6 @@ data class InjectionResult(
  * 与 ST 的差异（有意为之）：不做概率激活、冷却、粘性、递归、分组评分。
  */
 object SettingInjector {
-
-    /** 别名分隔符：中英文逗号、顿号都认。 */
-    private val aliasSeparators = Regex("[,，、;；]")
 
     fun inject(notes: List<NoteEntity>, scanText: String, cap: Int): InjectionResult {
         if (notes.isEmpty()) return InjectionResult(emptyList(), emptyList(), 0, cap)
@@ -81,46 +79,16 @@ object SettingInjector {
         return InjectionResult(kept, omitted, used, cap, overflowed)
     }
 
-    /** 标题 + 别名在正文里的出现次数；单字中文别名太吵，不参与匹配。 */
-    fun countHits(note: NoteEntity, text: String): Int {
-        if (text.isBlank()) return 0
-        var total = countName(note.title, text, allowSingleChar = true)
-        val seen = mutableSetOf(note.title)
-        note.aliases.split(aliasSeparators)
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .forEach { alias ->
-                if (seen.add(alias)) total += countName(alias, text, allowSingleChar = false)
-            }
-        return total
-    }
-
-    private fun countName(name: String, text: String, allowSingleChar: Boolean): Int {
-        val codePoints = name.codePointCount(0, name.length)
-        val asciiOnly = name.all { it.code < 128 }
-        if (!allowSingleChar && !asciiOnly && codePoints < 2) return 0
-        if (name.isBlank()) return 0
-        return if (asciiOnly) {
-            // 英文按整词算，避免 "Rain" 命中 "raining"
-            val regex = Regex(
-                "(?<![A-Za-z0-9])" + Regex.escape(name) + "(?![A-Za-z0-9])",
-                RegexOption.IGNORE_CASE
-            )
-            regex.findAll(text).count()
-        } else {
-            var index = text.indexOf(name, ignoreCase = true)
-            var count = 0
-            while (index >= 0) {
-                count++
-                index = text.indexOf(name, index + name.length.coerceAtLeast(1), ignoreCase = true)
-            }
-            count.coerceAtMost(20)
-        }
-    }
+    /**
+     * 标题 + 别名在正文里的出现次数。
+     * 直接委托 MentionIndex：界面上的「本章提到谁」和这里注入的命中数必须是同一份规则，
+     * 否则用户会看到「显示命中了 3 条，实际只注入了 2 条」这种没法解释的差异。
+     */
+    fun countHits(note: NoteEntity, text: String): Int = MentionIndex.countIn(note, text)
 
     /** 条目渲染成提示词里的样子；设定与素材共用。 */
     fun render(note: NoteEntity): String {
-        val aliases = note.aliases.split(aliasSeparators).map { it.trim() }.filter { it.isNotEmpty() }
+        val aliases = MentionIndex.names(note).drop(1)
         val aliasText = if (aliases.isEmpty()) "" else "（别名：" + aliases.joinToString("、") + "）"
         return "- [" + NoteKind.label(note.kind) + "] " + note.title + aliasText + "：" + note.content
     }

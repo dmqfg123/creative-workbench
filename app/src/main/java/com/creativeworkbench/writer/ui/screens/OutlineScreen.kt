@@ -211,6 +211,24 @@ fun OutlineScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                    // 这条大纲涉及哪些人物/设定：同一个 MentionIndex，和正文命中口径一致
+                    val involved = remember(node.id, node.content, state.notes) {
+                        com.creativeworkbench.writer.core.data.MentionIndex.scan(
+                            state.notes,
+                            node.title + "\n" + node.content
+                        )
+                    }
+                    if (involved.isNotEmpty()) {
+                        Spacer(Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            involved.take(5).forEach { hit ->
+                                Tag(hit.note.title, active = true)
+                            }
+                        }
+                    }
                     val chapter = node.chapterId?.let { id -> state.chapters.firstOrNull { it.id == id } }
                     val target = node.targetWords ?: 0
                     if (chapter != null || target > 0) {

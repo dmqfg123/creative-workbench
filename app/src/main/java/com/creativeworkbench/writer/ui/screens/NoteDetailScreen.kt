@@ -69,7 +69,9 @@ fun NoteDetailScreen(
     noteId: String,
     workId: String?,
     kind: String,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    /** 点「出现位置」里的章节直接进编辑器。 */
+    onOpenChapter: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val application = context.applicationContext as Application
@@ -285,6 +287,48 @@ fun NoteDetailScreen(
                     inner()
                 }
             )
+
+            // 反向索引：这条笔记在正文里出现在哪几章（novelWriter 的 back references / Obsidian 的 backlinks）
+            if (note.kind != NoteKind.MEMO && state.chapters.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("出现位置", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                    TextButton(
+                        onClick = { viewModel.scanAppearances() },
+                        enabled = !state.scanning
+                    ) {
+                        Text(
+                            when {
+                                state.scanning -> "扫描中…"
+                                state.scanned -> "重新扫描"
+                                else -> "扫描全书"
+                            }
+                        )
+                    }
+                }
+                if (state.scanned) {
+                    if (state.appearances.isEmpty()) {
+                        Text(
+                            "正文里还没提到过",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            state.appearances.forEach { (chapter, count) ->
+                                Tag(
+                                    text = chapter.title + " ×" + count,
+                                    active = true,
+                                    onClick = { onOpenChapter(chapter.id) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
 
             // 设定从哪一章开始生效：抄 Novelcrafter 的 Codex Progressions——
             // 第三章才成立的设定，不该在第一章的上下文里出现。

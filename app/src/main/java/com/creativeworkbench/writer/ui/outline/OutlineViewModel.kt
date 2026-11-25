@@ -22,6 +22,8 @@ data class OutlineUiState(
     val nodes: List<OutlineNodeEntity> = emptyList(),
     /** 伏笔账本（含已回收，界面按状态分区显示）。 */
     val foreshadowing: List<ForeshadowingEntity> = emptyList(),
+    /** 笔记（用来算「这条大纲涉及哪些人物/设定」）。 */
+    val notes: List<com.creativeworkbench.writer.core.data.NoteEntity> = emptyList(),
     val loading: Boolean = true
 ) {
     /** 未回收：写正文时要带上，也是大纲页要提示的数字。 */
@@ -56,6 +58,11 @@ class OutlineViewModel(
         viewModelScope.launch {
             foreshadowingRepository.observeByWork(workId).collect { items ->
                 _state.update { it.copy(foreshadowing = items) }
+            }
+        }
+        viewModelScope.launch {
+            container.notes.observeAll().collect { all ->
+                _state.update { it.copy(notes = all.filter { note -> note.workId == null || note.workId == workId }) }
             }
         }
     }
