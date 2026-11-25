@@ -254,7 +254,12 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                         chapterId = chapterId,
                         notes = viewModel.notes.collectAsStateWithLifecycle().value,
                         notesEnabled = settings.notesEnabled,
-                        onBack = { navController.popBackStack() },
+                        // 退出直接回书架：不再退到中间的目录页（用户反馈多一层很烦）
+                        onBack = {
+                            if (!navController.popBackStack("library", inclusive = false)) {
+                                navController.navigate("library") { launchSingleTop = true }
+                            }
+                        },
                         onSwitchChapter = { targetChapterId ->
                             // 换章：把当前章的编辑器从栈里换掉，返回键仍然回到目录，不会越退越多
                             viewModel.setCurrentChapter(workId, targetChapterId)

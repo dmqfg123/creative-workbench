@@ -30,7 +30,9 @@ import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -46,6 +48,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -58,6 +61,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -97,6 +101,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.background
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -253,24 +258,16 @@ fun EditorScreen(
             }
     }
 
-    // 键盘弹出会把视口挤小（adjustResize），这一段的活是：让正在写的那一段始终落在键盘上方。
-    // 不依赖 WindowInsets.ime —— HyperOS 上它可能一直报 0，但窗口确实变矮了；
-    // 所以直接盯「列表视口」的变化：视口一变就对齐，两遍兜住动画与重排。
+    // 只在切换段落时对齐几次（等键盘动画落定），**不监听滚动**：
+    // 之前盯着视口/可见项变化，用户一上下滑就被拽回光标位置，根本没法看全文。
     LaunchedEffect(state.activeBlockId) {
         val activeId = state.activeBlockId ?: return@LaunchedEffect
         val lazyIndex = state.blocks.indexOfFirst { block -> block.id == activeId } + 1
         if (lazyIndex <= 0) return@LaunchedEffect
-        snapshotFlow {
-            val info = listState.layoutInfo
-            Triple(info.viewportStartOffset, info.viewportEndOffset, info.visibleItemsInfo.size)
+        listOf(120L, 350L, 620L).forEach { wait ->
+            delay(wait)
+            alignFocusedBlock(listState, lazyIndex, bottomMarginPx)
         }
-            .distinctUntilChanged()
-            .collectLatest {
-                repeat(2) { pass ->
-                    delay(if (pass == 0) 120L else 180L)
-                    alignFocusedBlock(listState, lazyIndex, bottomMarginPx)
-                }
-            }
     }
 
     BackHandler {
@@ -554,6 +551,20 @@ fun EditorScreen(
         hostState = snackbar,
         modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp)
     )
+
+    // 换章：右侧滑出章节列表，点一下直接进编辑（不再「点标题→弹层→点章节」三步）
+    if (chapterSheetOpen) {
+        ChapterPickerOverlay(
+            chapters = state.chapters,
+            currentChapterId = chapterId,
+            onPick = { target ->
+                chapterSheetOpen = false
+                keyboard?.hide()
+                viewModel.flushThen { onSwitchChapter(target) }
+            },
+            onDismiss = { chapterSheetOpen = false }
+        )
+    }
     }
 
     if (menuOpen) {
@@ -576,27 +587,6 @@ fun EditorScreen(
         )
     }
 
-    if (chapterSheetOpen) {
-        ActionSheet(
-            title = "换章",
-            subtitle = state.workTitle.ifBlank { "作品" } + " · 共 " + state.chapters.size + " 章",
-            actions = state.chapters.map { chapter ->
-                SheetAction(
-                    label = chapter.title,
-                    description = chapter.wordCount.toString() + " 字" +
-                        if (chapter.id == chapterId) " · 正在写" else "",
-                    onClick = {
-                        if (chapter.id != chapterId) {
-                            keyboard?.hide()
-                            val target = chapter.id
-                            viewModel.flushThen { onSwitchChapter(target) }
-                        }
-                    }
-                )
-            },
-            onDismiss = { chapterSheetOpen = false }
-        )
-    }
 
     if (notesOpen) {
         NotesDrawer(
@@ -615,6 +605,21 @@ fun EditorScreen(
                 }
             },
             onDismiss = { notesOpen = false }
+        )
+    }
+
+    // 可以手动勾选/取消引用的设定与素材（人物/设定 + 勾过 AI 参考的素材）
+    val aiContextNotes = notes.filter {
+        it.workId == workId && (NoteKind.setting.contains(it.kind) ||
+            (NoteKind.material.contains(it.kind) && it.aiReference))
+    }
+    val reprepareAi: () -> Unit = {
+        val actionId = aiState.action?.id ?: AiActions.CONTINUE
+        aiViewModel.prepare(
+            actionId,
+            state.blocks,
+            state.activeBlockId,
+            if (actionId == AiActions.REWRITE) pendingSelection else null
         )
     }
 
@@ -716,6 +721,18 @@ fun EditorScreen(
                     aiOpen = false
                     viewModel.activate(state.blocks.getOrNull(index)?.id ?: "", 0)
                 }
+            },
+            // 改字数/勾掉设定后立刻按新配置重新装配上下文（预览马上跟着变）
+            onLength = { len ->
+                aiViewModel.setLength(len)
+                reprepareAi()
+            },
+            onResultEdit = { aiViewModel.editResult(it) },
+            contextNotes = aiContextNotes,
+            excludedNoteIds = aiState.excludedNoteIds,
+            onToggleNote = { id ->
+                aiViewModel.toggleNote(id)
+                reprepareAi()
             }
         )
     }
@@ -1401,6 +1418,87 @@ private class BlockEditText(context: Context) : EditText(context) {
                 val merged = onBackspaceAtStart?.invoke() ?: return false
                 applyMerge(merged)
                 return true
+            }
+        }
+    }
+}
+
+/**
+ * 换章侧栏：从右侧滑出，遮罩点击关闭；点章节直接在编辑里切换。
+ * 原来走的是「点标题/工具条 → 底部弹层 → 点章节」，三步太多。
+ */
+@Composable
+private fun ChapterPickerOverlay(
+    chapters: List<com.creativeworkbench.writer.core.data.ChapterEntity>,
+    currentChapterId: String,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+    Box(Modifier.fillMaxSize()) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.35f))
+                .clickable { onDismiss() }
+        )
+        AnimatedVisibility(
+            visible = shown,
+            enter = slideInHorizontally(tween(Motion.Medium)) { it },
+            exit = slideOutHorizontally(tween(Motion.Fast)) { it },
+            modifier = Modifier.align(Alignment.CenterEnd)
+        ) {
+            androidx.compose.material3.Surface(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(0.78f),
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 12.dp
+            ) {
+                Column(Modifier.fillMaxSize().navigationBarsPadding()) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 16.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("章节", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        TextButton(onClick = onDismiss) { Text("关闭") }
+                    }
+                    Text(
+                        "共 " + chapters.size + " 章 · 点一下直接编辑",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp)
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    LazyColumn(Modifier.fillMaxSize()) {
+                        items(chapters, key = { it.id }) { chapter ->
+                            val current = chapter.id == currentChapterId
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { if (!current) onPick(chapter.id) }
+                                    .padding(horizontal = 12.dp, vertical = 2.dp),
+                                shape = MaterialTheme.shapes.small,
+                                color = if (current) MaterialTheme.colorScheme.primaryContainer
+                                else MaterialTheme.colorScheme.surface
+                            ) {
+                                Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                                    Text(
+                                        chapter.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal
+                                    )
+                                    Text(
+                                        chapter.wordCount.toString() + " 字" + (if (current) " · 正在写" else ""),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

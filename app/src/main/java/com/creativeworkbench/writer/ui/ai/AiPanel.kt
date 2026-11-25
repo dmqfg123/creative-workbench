@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -35,12 +36,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.creativeworkbench.writer.core.ai.AiActions
+import com.creativeworkbench.writer.core.data.NoteEntity
+import com.creativeworkbench.writer.core.data.NoteKind
 import com.creativeworkbench.writer.core.ai.SelectionInfo
 import com.creativeworkbench.writer.ui.design.GhostButton
 import com.creativeworkbench.writer.ui.design.PillButton
@@ -65,7 +69,15 @@ fun AiPanel(
     onCancel: () -> Unit,
     onDismiss: () -> Unit,
     onWrite: (String) -> Unit,
-    onJumpToBlock: (String) -> Unit
+    onJumpToBlock: (String) -> Unit,
+    /** 续写字数（300/600/1000）。 */
+    onLength: (Int) -> Unit = {},
+    /** 结果区直接编辑（改完再写入）。 */
+    onResultEdit: (String) -> Unit = {},
+    /** 可以手动取消引用的设定/素材。 */
+    contextNotes: List<com.creativeworkbench.writer.core.data.NoteEntity> = emptyList(),
+    excludedNoteIds: Set<String> = emptySet(),
+    onToggleNote: (String) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val clipboard = LocalClipboardManager.current
@@ -104,6 +116,32 @@ fun AiPanel(
                         onClick = { onAction(item.id) }
                     )
                 }
+            }
+            if (action?.id == AiActions.CONTINUE) {
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "续写长度",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.align(Alignment.CenterVertically)
+                    )
+                    listOf(300, 600, 1000).forEach { len ->
+                        Tag(
+                            text = len.toString() + " 字",
+                            active = state.lengthChars == len,
+                            onClick = { onLength(len) }
+                        )
+                    }
+                }
+            }
+            if (contextNotes.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                ContextNotePicker(
+                    notes = contextNotes,
+                    excluded = excludedNoteIds,
+                    onToggle = onToggleNote
+                )
             }
             Spacer(Modifier.height(12.dp))
             Text(
@@ -260,15 +298,25 @@ fun AiPanel(
                     color = MaterialTheme.colorScheme.surfaceContainerHigh,
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                 ) {
-                    Text(
-                        state.resultText,
-                        style = MaterialTheme.typography.bodyMedium,
+                    // 直接在结果区改：想删一句、改个词，不用先写入正文再回头改。
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = state.resultText,
+                        onValueChange = onResultEdit,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
                         modifier = Modifier
+                            .fillMaxWidth()
                             .heightIn(max = 320.dp)
                             .verticalScroll(rememberScrollState())
                             .padding(12.dp)
                     )
                 }
+                Text(
+                    "可以直接在上面的框里改，改完再写入",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             state.usage?.let { usage ->
@@ -361,5 +409,67 @@ fun AiPanel(
             dismissButton = { TextButton(onClick = { confirmWrite = false }) { Text("取消") } },
             shape = MaterialTheme.shapes.large
         )
+    }
+}
+
+/**
+ * 引用设定：默认带全部人物/设定，用户可以逐条勾掉。
+ */
+@Composable
+private fun ContextNotePicker(
+    notes: List<NoteEntity>,
+    excluded: Set<String>,
+    onToggle: (String) -> Unit
+) {
+    var open by remember { mutableStateOf(false) }
+    val included = notes.count { it.id !in excluded }
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                .clickable { open = !open }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "引用设定 " + included + "/" + notes.size + " 条",
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                if (open) "收起" else "调整",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        if (open) {
+            notes.forEach { note ->
+                val checked = note.id !in excluded
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onToggle(note.id) }
+                        .padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(checked = checked, onCheckedChange = { onToggle(note.id) })
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            NoteKind.label(note.kind) + " · " + note.title,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        if (note.content.isNotBlank()) {
+                            Text(
+                                note.content.replace('\n', ' ').take(40),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }

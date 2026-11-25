@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.creativeworkbench.writer.WorkbenchApp
+import com.creativeworkbench.writer.core.ai.ActionTuning
 import com.creativeworkbench.writer.core.ai.AiActionSpec
 import com.creativeworkbench.writer.core.ai.AiActions
 import com.creativeworkbench.writer.core.ai.AiCallResult
@@ -45,7 +46,11 @@ data class AiUiState(
     val requestCount: Int = 1,
     val availableActions: List<AiActionSpec> = AiActions.builtin,
     /** 最近一次调用的 token 账（含缓存命中）。 */
-    val usage: AiUsage? = null
+    val usage: AiUsage? = null,
+    /** 续写目标字数（面板里选）。 */
+    val lengthChars: Int = 600,
+    /** 用户手动勾掉/勾上的设定 id；null = 自动（命中优先全带）。 */
+    val excludedNoteIds: Set<String> = emptySet()
 )
 
 class AiViewModel(
@@ -75,7 +80,9 @@ class AiViewModel(
         blocks: List<Block>,
         activeBlockId: String?,
         selection: SelectionInfo?,
-        allowOverflow: Boolean = false
+        allowOverflow: Boolean = false,
+        lengthChars: Int = _state.value.lengthChars,
+        excludedNoteIds: Set<String> = _state.value.excludedNoteIds
     ) {
         val action = _state.value.availableActions.firstOrNull { it.id == actionId }
             ?: AiActions.byId(actionId)
@@ -99,7 +106,9 @@ class AiViewModel(
             val prepared = runCatching {
                 builder.prepare(
                     action, config, workId, chapterId, blocks, activeBlockId, selection, allowOverflow,
-                    instructionOverride = promptOverride
+                    instructionOverride = promptOverride,
+                    lengthChars = lengthChars,
+                    excludedNoteIds = excludedNoteIds
                 )
             }.getOrElse { error ->
                 _state.value = _state.value.copy(error = "上下文装配失败：" + (error.message ?: "未知错误"))
@@ -133,7 +142,13 @@ class AiViewModel(
                 ChatMessage("system", prepared.system),
                 ChatMessage("user", prepared.user)
             )
-            when (val result = client.chat(config, apiKey, messages, action.tuning)) {
+            // 输出上限按目标字数算（1 汉字≈0.6 token，留 40% 余量），不再让模型写 2500 字
+            val tuned = if (action.id == AiActions.CONTINUE) {
+                ActionTuning(maxTokens = (prepared.lengthChars * 0.6 * 1.4).toInt().coerceIn(512, 2048))
+            } else {
+                action.tuning
+            }
+            when (val result = client.chat(config, apiKey, messages, tuned)) {
                 is AiCallResult.Error -> {
                     _state.value = _state.value.copy(generating = false, error = result.message)
                 }
@@ -214,6 +229,22 @@ class AiViewModel(
                 )
             )
         }
+    }
+
+    /** 面板里改字数：只影响下一次装配的提示词与输出上限。 */
+    fun setLength(chars: Int) {
+        _state.value = _state.value.copy(lengthChars = chars)
+    }
+
+    /** 用户在结果区直接改字，写回 state 再写入正文。 */
+    fun editResult(text: String) {
+        _state.value = _state.value.copy(resultText = text)
+    }
+
+    fun toggleNote(noteId: String) {
+        val excluded = _state.value.excludedNoteIds.toMutableSet()
+        if (!excluded.add(noteId)) excluded.remove(noteId)
+        _state.value = _state.value.copy(excludedNoteIds = excluded)
     }
 
     fun cancel() {

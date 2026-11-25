@@ -27,7 +27,7 @@ class ModelCatalogTest {
         val profile = ModelCatalog.profileFor("https://api.deepseek.com", "deepseek-flash")
         val fast = profile.request(ActionTuning(), globalThinking = false)
         val thinking = profile.request(ActionTuning(), globalThinking = true)
-        assertEquals(1.5, fast.temperature!!, 0.0001)
+        assertEquals(1.2, fast.temperature!!, 0.0001)
         assertNull("思考模式不该发 temperature", thinking.temperature)
         assertTrue(thinking.maxTokens > fast.maxTokens)
         assertTrue(thinking.timeoutSeconds > fast.timeoutSeconds)
@@ -57,6 +57,6 @@ class ModelCatalogTest {
         assertFalse(profile.request(ActionTuning(thinking = false), globalThinking = true).thinking)
         // 开了思考就不该再带 temperature
         assertNull(profile.request(ActionTuning(), globalThinking = true).temperature)
-        assertEquals(1.5, profile.request(ActionTuning(thinking = false), globalThinking = true).temperature!!, 0.0001)
+        assertEquals(1.2, profile.request(ActionTuning(thinking = false), globalThinking = true).temperature!!, 0.0001)
     }
 }

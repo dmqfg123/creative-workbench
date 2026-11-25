@@ -20,7 +20,7 @@ class AiClientPayloadTest {
     @Test
     fun deepSeekFastModeSendsTemperatureAndDisablesThinking() {
         val json = payload(AiConfig(model = "deepseek-flash", deepThinking = false))
-        assertEquals(1.5, json.getDouble("temperature"), 0.0001)
+        assertEquals(1.2, json.getDouble("temperature"), 0.0001)
         assertEquals("disabled", json.getJSONObject("thinking").getString("type"))
         assertEquals(4096, json.getInt("max_tokens"))
         assertFalse(json.getBoolean("stream"))
@@ -41,7 +41,7 @@ class AiClientPayloadTest {
             ActionTuning(maxTokens = 6144)
         )
         assertEquals(6144, json.getInt("max_tokens"))
-        assertEquals(1.5, json.getDouble("temperature"), 0.0001)
+        assertEquals(1.2, json.getDouble("temperature"), 0.0001)
     }
 
     @Test

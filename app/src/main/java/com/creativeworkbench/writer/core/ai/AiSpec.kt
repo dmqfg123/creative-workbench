@@ -41,7 +41,7 @@ data class AiActionSpec(
 data class AiConfig(
     val baseUrl: String = ModelCatalog.DEEPSEEK_BASE_URL,
     val model: String = ModelCatalog.DEFAULT_MODEL,
-    /** DeepSeek 深度思考：更慢更贵、推理更细；关闭时按创作温度 1.5 直接写。 */
+    /** DeepSeek 深度思考：更慢更贵、推理更细；关闭时按创作温度 1.2 直接写。 */
     val deepThinking: Boolean = false,
     val allowCleartextHttp: Boolean = false
 ) {
@@ -120,8 +120,9 @@ object ModelCatalog {
             maxOutputTokens = 393_216,
             requestMaxTokens = 4_096,
             thinkingMaxTokens = 16_384,
-            // 官方参数建议：创作/诗歌 1.5；思考模式不认 temperature，请求时不发。
-            temperature = 1.5,
+            // 官方建议创作写作 1.5，但真机实测 1.5 会跑飞（2500+ 字、结构错乱，甚至吐 XML 片段）；
+            // 1.2 在“有文采”和“收得住”之间稳定得多。思考模式不认 temperature，请求时不发。
+            temperature = 1.2,
             timeoutSeconds = 180,
             supportsThinking = true
         )

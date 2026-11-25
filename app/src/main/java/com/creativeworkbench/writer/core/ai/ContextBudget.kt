@@ -34,13 +34,16 @@ object PromptBudget {
         indices: List<Int>,
         cap: Int,
         anchorIndex: Int?,
-        kind: String = "正文"
+        kind: String = "正文",
+        /** 带 [[bN]] 段落标记（只有「检查」需要按段落 id 回跳；续写/改写带标记会被模型照抄）。 */
+        markers: Boolean = true
     ): FitResult {
         if (indices.isEmpty()) return FitResult("", 0, 0, emptyList())
         // 正文渲染必须稳定：DeepSeek 的上下文缓存按「完全一致的公共前缀」命中，
         // 在正文里插「← 从这里续写」这类随光标变的标记，会把这一段之后的缓存全废掉。
         // 续写位置改成正文之后的一行说明（见 AiContextBuilder）。
-        fun render(index: Int): String = "[[b" + index + "]] " + blocks[index].text
+        fun render(index: Int): String =
+            if (markers) "[[b" + index + "]] " + blocks[index].text else blocks[index].text
         val kept = indices.toMutableList()
         val dropped = mutableListOf<ContextExclusion>()
         var tokens = kept.sumOf { TokenEstimator.estimate(render(it)) }

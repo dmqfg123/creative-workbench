@@ -23,7 +23,8 @@ data class ContextPreview(
     /** 没进上下文的条目与原因，逐条可解释。 */
     val excluded: List<ContextExclusion> = emptyList(),
     val budget: Int = 0,
-    val used: Int = 0
+    val used: Int = 0,
+    val lengthChars: Int = 600
 )
 
 data class ContextBlock(val label: String, val tokens: Int, val cap: Int)
@@ -34,7 +35,9 @@ data class PreparedContext(
     val system: String,
     val user: String,
     val preview: ContextPreview? = null,
-    val overflow: SettingOverflow? = null
+    val overflow: SettingOverflow? = null,
+    /** 本次续写目标字数（生成时按它算 max_tokens）。 */
+    val lengthChars: Int = 600
 )
 
 /**
@@ -54,7 +57,11 @@ class AiContextBuilder(
         activeBlockId: String?,
         selection: SelectionInfo?,
         allowSettingOverflow: Boolean,
-        instructionOverride: String? = null
+        instructionOverride: String? = null,
+        /** 续写目标字数；只影响提示词里的长度要求（输出上限在 AiViewModel 按它算）。 */
+        lengthChars: Int = 600,
+        /** 用户手动勾掉的设定 id（面板里可以取消引用某条人物/设定）。 */
+        excludedNoteIds: Set<String> = emptySet()
     ): PreparedContext {
         val chapterList = chapters.chapters(workId)
         val allNotes = noteRepository.observeAll().first()
@@ -78,7 +85,7 @@ class AiContextBuilder(
 
         // 设定类：当前作品的全部人物/设定，强制注入。
         val settingNotes = allNotes.filter {
-            it.workId == workId && NoteKind.setting.contains(it.kind)
+            it.workId == workId && NoteKind.setting.contains(it.kind) && it.id !in excludedNoteIds
         }
         val scanText = blocks.joinToString("\n") { it.text } + "\n" + prevTail
         val injection = SettingInjector.inject(settingNotes, scanText, settingCap)
@@ -101,7 +108,7 @@ class AiContextBuilder(
         // 素材类：只有显式勾选（aiReference）的才进；备忘不参与。
         val materialNotes = allNotes.filter {
             (it.workId == null || it.workId == workId) &&
-                NoteKind.material.contains(it.kind) && it.aiReference
+                NoteKind.material.contains(it.kind) && it.aiReference && it.id !in excludedNoteIds
         }.sortedBy { it.id }
         val materialFit = PromptBudget.fitEntries(
             entries = materialNotes.map { it.id to SettingInjector.render(it) },
@@ -127,16 +134,28 @@ class AiContextBuilder(
         val rewriteSelectionIndex = selection
             ?.let { selected -> blocks.indexOfFirst { it.id == selected.blockId } }
             ?.takeIf { it >= 0 }
+        // 只有「检查」需要段落 id（结果要能跳回段落），续写/改写一律不带标记：
+        // 真机实测带 [[bN]] 时模型会照抄标记，甚至吐出 XML 片段（温度 1.5 时更严重）。
+        val withMarkers = action.id == AiActions.CHECK
         val chapterFit = when (action.id) {
-            AiActions.CHECK -> PromptBudget.fitBlocks(blocks, checkIndices(blocks, anchorIndex), chapterCap, anchorIndex)
+            AiActions.CHECK -> PromptBudget.fitBlocks(
+                blocks, checkIndices(blocks, anchorIndex), chapterCap, anchorIndex, markers = true
+            )
             // 选中段单独作为【选中文字】发一次，正文窗口里要把它排除，否则同一段算两遍、白花 token
             AiActions.REWRITE -> PromptBudget.fitBlocks(
                 blocks,
                 rewriteIndices(blocks, selection).filter { it != rewriteSelectionIndex },
                 chapterCap,
-                null
+                null,
+                markers = false
             )
-            else -> PromptBudget.fitBlocks(blocks, blocks.indices.toList(), chapterCap, anchorIndex ?: blocks.lastIndex)
+            else -> PromptBudget.fitBlocks(
+                blocks,
+                blocks.indices.toList(),
+                chapterCap,
+                anchorIndex ?: blocks.lastIndex,
+                markers = withMarkers
+            )
         }
         val chapterText = chapterFit.text
 
@@ -175,18 +194,18 @@ class AiContextBuilder(
                 appendLine("【前一章结尾】")
                 appendLine(prevTail)
             }
-            appendLine("【当前章（每段前的 [[id]] 是段落标记）】")
+            appendLine(if (withMarkers) "【当前章（每段前的 [[id]] 是段落标记）】" else "【当前章】")
             appendLine(chapterText)
             if (anchorIndex != null && action.id == AiActions.CONTINUE) {
                 // 续写位置写成独立一行：正文本身保持与上次调用逐字一致，缓存才命中
-                appendLine("【续写位置】从第 " + (anchorIndex + 1) + " 段（" + markerOf(anchorIndex) + "）之后接着写。")
+                appendLine("【续写位置】接在上面最后一段之后。")
             }
             if (selection != null) {
                 appendLine("【选中文字】")
                 appendLine(selection.text)
             }
             appendLine("【任务】")
-            append(instructionOverride?.takeIf { it.isNotBlank() } ?: actionInstruction(action, selection))
+            append(instructionOverride?.takeIf { it.isNotBlank() } ?: actionInstruction(action, selection, lengthChars))
         }
 
         val settingChars = settingText.length
@@ -228,7 +247,8 @@ class AiContextBuilder(
                 blocks = blocksBudget,
                 excluded = dropped,
                 budget = budget,
-                used = blocksBudget.sumOf { it.tokens }
+                used = blocksBudget.sumOf { it.tokens },
+                lengthChars = lengthChars
             )
         )
     }
@@ -236,9 +256,17 @@ class AiContextBuilder(
     /** 段落标记名，和正文里的 [[bN]] 对齐。 */
     private fun markerOf(index: Int): String = "b" + index
 
-    private fun actionInstruction(action: AiActionSpec, selection: SelectionInfo?): String = when (action.id) {
-        AiActions.CONTINUE -> "从【续写位置】指定的那一段之后接着写 300-600 字，不要重复已有句子，不要解释。"
-        AiActions.REWRITE -> "改写【选中文字】这一段，保持情节和信息不变，长度接近原文。只输出改写后的文字。"
+    private fun actionInstruction(
+        action: AiActionSpec,
+        selection: SelectionInfo?,
+        lengthChars: Int
+    ): String = when (action.id) {
+        AiActions.CONTINUE ->
+            "从【续写位置】接着写约 " + lengthChars + " 字。只输出续写出来的正文：" +
+                "不要任何段落标记、编号、标题、前后缀，不要重复已有句子，不要解释或总结。"
+        AiActions.REWRITE ->
+            "改写【选中文字】这一段，保持情节和信息不变，长度接近原文。" +
+                "只输出改写后的正文，不要任何标记、编号、标题或说明。"
         AiActions.CHECK ->
             "检查【当前章】，输出严格 JSON（不要代码围栏）：" +
                 "{\"issues\":[{\"blockId\":\"段落 id\",\"excerpt\":\"原文片段\",\"severity\":\"low|medium|high\",\"message\":\"问题说明\"}]}。" +
