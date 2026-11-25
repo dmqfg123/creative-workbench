@@ -136,16 +136,12 @@ class AiChatViewModel(
                 }
             }
 
+            // 不给任何角色扮演 / 范围限制 / 格式指令：
+            // 之前那版「你是小说写作助手，只处理情节人物设定」会让它把「查神话」「查民俗」当成无关问题拒掉，
+            // 也会把幻想题材的回答往「现实主义小说」上带。这里只在用户勾了资料时附一段中立数据，
+            // 没勾就一条 system 都不发——就是原原本本的模型。
             val context = buildContext()
-            val system = buildString {
-                appendLine("你是中文小说写作助手，和作者讨论情节、人物、设定、写法。")
-                appendLine("回答用中文，先说结论，不要客套。需要举例时给可直接抄进正文的句子。")
-                appendLine("不要输出 markdown 标题层级之外的装饰符号；不要提「作为一个 AI」。")
-                if (context.isNotBlank()) {
-                    appendLine()
-                    appendLine(context)
-                }
-            }
+            val system = if (context.isBlank()) "" else "以下是提问者随本次提问附上的资料，仅在相关时参考：\n" + context
             val history = _state.value.turns
                 .filter { !it.streaming }
                 .dropLast(1)
@@ -159,7 +155,8 @@ class AiChatViewModel(
                 }
                 append(question)
             }
-            val messages = mutableListOf(ChatMessage("system", system))
+            val messages = mutableListOf<ChatMessage>()
+            if (system.isNotBlank()) messages.add(ChatMessage("system", system))
             messages.addAll(history)
             messages.add(ChatMessage("user", payload))
 
@@ -189,7 +186,7 @@ class AiChatViewModel(
                     updateAssistant(assistantTurn.id, builder.toString().ifBlank { "（生成失败）" }, false)
                 }
                 is AiCallResult.Ok -> {
-                    updateAssistant(assistantTurn.id, result.content, false, hits)
+                    updateAssistant(assistantTurn.id, com.creativeworkbench.writer.core.ai.PlainText.of(result.content), false, hits)
                     _state.update { it.copy(sending = false, usage = (it.usage ?: AiUsage()) + result.usage) }
                 }
             }
@@ -259,8 +256,9 @@ class AiChatViewModel(
                         id = UUID.randomUUID().toString(),
                         workId = workId,
                         kind = kind,
-                        title = turn.text.lineSequence().firstOrNull()?.take(24)?.ifBlank { "AI 对话" } ?: "AI 对话",
-                        content = turn.text,
+                        title = com.creativeworkbench.writer.core.ai.PlainText.of(turn.text)
+                            .lineSequence().firstOrNull()?.take(24)?.ifBlank { "AI 对话" } ?: "AI 对话",
+                        content = com.creativeworkbench.writer.core.ai.PlainText.of(turn.text),
                         aiReference = true,
                         createdAtMs = now,
                         updatedAtMs = now

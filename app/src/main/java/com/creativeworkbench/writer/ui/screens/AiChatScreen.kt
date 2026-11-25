@@ -121,11 +121,13 @@ fun AiChatScreen(
             if (state.turns.isEmpty()) {
                 item {
                     Column(Modifier.fillMaxWidth().padding(top = 28.dp, start = 8.dp, end = 8.dp)) {
-                        Text("在这里和 AI 讨论怎么写", style = MaterialTheme.typography.titleMedium)
+                        Text("想问什么就问", style = MaterialTheme.typography.titleMedium)
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "可以问「这章结尾怎么收」「这个人物动机站得住吗」「帮我想三个转折」，\n" +
-                                "开「联网」会让 AI 先查资料再回答。\n" +
+                            "没有预设人设、不限制话题：查神话传说、民俗、历史地理、职业细节，" +
+                                "或者讨论情节、人物动机、写法，都行。\n" +
+                                "开「联网」会让 AI 先去查资料再回答；勾「大纲 / 笔记」会把作品资料一起带上。" +
+                                "不勾就是一条 system 都不发的原生模型。\n" +
                                 "满意的回答点「存为笔记」就进笔记板块，写正文时能被 AI 参考。",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -136,7 +138,11 @@ fun AiChatScreen(
             items(state.turns, key = { it.id }) { turn ->
                 ChatBubble(
                     turn = turn,
-                    onCopy = { clipboard.setText(AnnotatedString(turn.text)) },
+                    onCopy = {
+                        clipboard.setText(
+                            AnnotatedString(com.creativeworkbench.writer.core.ai.PlainText.of(turn.text))
+                        )
+                    },
                     onSave = { viewModel.saveAsNote(turn, NoteKind.FRAGMENT) }
                 )
             }
@@ -294,7 +300,11 @@ private fun ChatBubble(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
-                    Text(turn.text, style = MaterialTheme.typography.bodyMedium)
+                    // 显示层去装饰（###、**、表格竖线），不改模型收到的内容
+                    Text(
+                        com.creativeworkbench.writer.core.ai.PlainText.of(turn.text),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
                 if (turn.hits.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
