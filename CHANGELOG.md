@@ -2,6 +2,41 @@
 
 # CHANGELOG
 
+## 0.15.0（2026-11-26）大纲 P1+P2 全部落地（照开源实现的 DDL 与提示词）
+
+用户要求「全部实现，实现方式照网上拆代码」。参考实现（含具体文件与字段）见
+参考/大纲调研_开源与AI_20261126.md：novelWriter（大纲=标题层级+@tag 投影）、Manuskript（FlatData 五级摘要 +
+Plot importance）、bibisco（scene 六维，无 conflict 字段——纠正了此前误传）、AI_NovelGenerator（重写后
+volume→arc→scene→chapter，本章白名单字段 + 邻章仅 goal/start_state/end_state/must_avoid + 上章原文末 6000 字）、
+long-novel-writer（L0–L5 摘要写定即冻结、canon/facts.jsonl、promises 带 deadline）、SillyTavern（关键词→order→
+budget→递归 + @D depth）。
+
+### 落地（数据库 v2 → v3，真机旧库升级已验证）
+
+1. **大纲目标字数**（`outline_nodes.targetWords`）：一条 ≈ 500–800 字（Novelcrafter 口径）。编辑框给
+   不设/500/1000/2000/3000；卡片显示「正文 1209 字 · 目标 2000 字」；提示词里带「（目标约 N 字）」，
+   让模型知道这一点写多少，而不是一条要点灌 3000 字。
+2. **大纲模板**（照 Novelcrafter「Create from Outline」的可解析纯文本约定）：三幕剧 8 拍 / 救猫咪 15 拍 /
+   英雄之旅 12 阶段，点一下按章节顺序铺节点（章节不够落全书级），不覆盖已有节点。
+3. **「按大纲推进」**（AI_NovelGenerator 的 chapter plan 提示词）：开关在 AI 面板「边界」行，开后追加
+   【本章边界】块（只写第 N 章 / 用行动与结果完成 / 篇幅 ±15%）。**改前按红线跑了 ai-eval**：
+   600 字目标下，无边界块写 940 字（1.57×，灌水），有边界块 595 字（0.99×），两份都无标记/无 XML/无大纲泄漏，
+   第二次调用前缀缓存命中 95%。记录在 work/ai-eval/结果_按大纲推进_20261126.md。默认关。
+4. **设定生效章节**（Novelcrafter Codex Progressions）：`notes.fromChapterId`，笔记详情里给「全篇 / 第 N 章」
+   chips。注入时只取「当前章及之前」生效的设定——第三章才成立的设定不会提前出现在第一章的上下文里。
+5. **伏笔账本**（long-novel-writer 的 foreshadowing-ledger，比「埋/收两字段」多状态）：新表 `foreshadowing`
+   （title/detail/plantedChapterId/dueChapterId/paidChapterId/status/priority，状态 planted·reinforced·paid·abandoned）。
+   大纲页诊断行显示「未回收伏笔 N」，点开是账本面板：加一条、标记已回收、删除；
+   写正文时未回收伏笔**强制注入**（最多 12 条），提示词里带「计划第 N 章回收」。
+6. 备份再扩：大纲的 level/targetWords/beatRole、笔记的 fromChapterId、整张伏笔表都进 BackupBundle，
+   导入时按「作品还在」过滤孤儿。
+
+### 数据库迁移
+
+v2 → v3 全部是新增可空列 + 新建一张表（SQLite 的 ADD COLUMN 对 NOT NULL 要带默认值，与 Room 校验容易打架，
+可空最省事）：outline_nodes.level / targetWords / beatRole、notes.fromChapterId、CREATE TABLE foreshadowing。
+建表语句与 Room 导出的 3.json 逐字一致；真机用旧库（3 章 / 11 笔记 / 大纲 1 条）覆盖升级，无崩溃、数据完好。
+
 ## 0.14.0（2026-11-26）大纲与 AI 打通：反向大纲 + 章摘要闭环 + 结构诊断
 
 用户要求「先查外部相似项目的大纲能力，再定我们的大纲怎么和 AI 结合、和其他板块怎么联动」。

@@ -54,7 +54,12 @@ data class NoteEntity(
     val pinned: Boolean = false,
     val createdAtMs: Long,
     val updatedAtMs: Long,
-    val sourceNoteId: String? = null
+    val sourceNoteId: String? = null,
+    /**
+     * 这条设定从哪一章开始生效（null = 全篇生效）。
+     * 抄 Novelcrafter 的 Codex Progressions：写在某章里的设定增量，不该在更早的章节里出现。
+     */
+    val fromChapterId: String? = null
 )
 
 /**
@@ -73,7 +78,34 @@ data class OutlineNodeEntity(
     val content: String = "",
     val orderIndex: Int,
     val createdAtMs: Long,
-    val updatedAtMs: Long
+    val updatedAtMs: Long,
+    /**
+     * 粒度（照 Manuskript「同一实体多粒度」的做法，不为每种粒度建表）：
+     * 1=卷 2=章 3=场景 4=beat（空 = beat）。当前只用 beat。
+     */
+    val level: Int? = null,
+    /** 这条预计写多少字；空 = 不设。一个 beat 约 500–800 字（Novelcrafter 口径）。 */
+    val targetWords: Int? = null,
+    /** setup / turn / reveal / payoff（可空），照 AI_NovelGenerator 的 beatRole。 */
+    val beatRole: String? = null
+)
+
+/**
+ * 伏笔账本（照 long-novel-writer 的 foreshadowing-ledger：伏笔不是标签，是有状态的账本）。
+ * 状态：planted（埋了没动）/ reinforced（强化过）/ paid（已回收）/ abandoned（弃用）。
+ * 大纲页会提示「未回收 N 条」，AI 生成时把未回收的伏笔带上。
+ */
+@Entity(tableName = "foreshadowing", indices = [Index("workId"), Index("plantedChapterId")])
+data class ForeshadowingEntity(
+    @PrimaryKey val id: String,
+    val workId: String,
+    val title: String,
+    val detail: String = "",
+    val plantedChapterId: String? = null,
+    val dueChapterId: String? = null,
+    val paidChapterId: String? = null,
+    val status: String = "planted",
+    val priority: Int = 1
 )
 
 @Entity(tableName = "settings")

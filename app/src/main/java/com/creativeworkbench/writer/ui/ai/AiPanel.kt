@@ -93,7 +93,8 @@ fun AiPanel(
     /** 大纲为空时点「大纲 0」直接去大纲页（否则那个 chip 只是个没用的标签）。 */
     onOpenOutline: () -> Unit = {},
     /** 把摘要存成本章的大纲节点（反向大纲）。 */
-    onSaveAsOutlineNode: () -> Unit = {}
+    onSaveAsOutlineNode: () -> Unit = {},
+    onToggleFollowOutline: (Boolean) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val clipboard = LocalClipboardManager.current
@@ -187,6 +188,18 @@ fun AiPanel(
                             onClick = { onBodyRange(range) }
                         )
                     }
+                }
+            }
+
+            if (action?.id == AiActions.CONTINUE || action?.id == AiActions.EXPAND) {
+                Spacer(Modifier.height(8.dp))
+                ChipLine("边界") {
+                    Tag(
+                        text = "按大纲推进",
+                        active = state.followOutline,
+                        enabled = state.includeOutline,
+                        onClick = { onToggleFollowOutline(!state.followOutline) }
+                    )
                 }
             }
 

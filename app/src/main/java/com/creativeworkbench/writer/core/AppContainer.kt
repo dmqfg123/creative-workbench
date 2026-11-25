@@ -8,6 +8,7 @@ import com.creativeworkbench.writer.core.backup.BackupService
 import com.creativeworkbench.writer.core.data.ChapterFileStore
 import com.creativeworkbench.writer.core.data.ChapterRepository
 import com.creativeworkbench.writer.core.data.NoteRepository
+import com.creativeworkbench.writer.core.data.ForeshadowingRepository
 import com.creativeworkbench.writer.core.data.OutlineRepository
 import com.creativeworkbench.writer.core.data.WorkbenchDatabase
 import com.creativeworkbench.writer.core.nav.ModuleHost
@@ -20,6 +21,7 @@ class AppContainer(context: Context) {
     val chapters: ChapterRepository = ChapterRepository(database, chapterFiles)
     val notes: NoteRepository = NoteRepository(database)
     val outline: OutlineRepository = OutlineRepository(database)
+    val foreshadowing: ForeshadowingRepository = ForeshadowingRepository(database)
     val aiConfig: AiConfigStore = AiConfigStore(context)
     val aiHistory: AiHistoryStore = AiHistoryStore(context)
     val plugins: PluginStore = PluginStore(context)

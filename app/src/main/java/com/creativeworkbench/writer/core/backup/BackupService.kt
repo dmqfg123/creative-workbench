@@ -9,6 +9,7 @@ import com.creativeworkbench.writer.core.data.Block
 import com.creativeworkbench.writer.core.data.ChapterContent
 import com.creativeworkbench.writer.core.data.ChapterEntity
 import com.creativeworkbench.writer.core.data.ChapterFileStore
+import com.creativeworkbench.writer.core.data.ForeshadowingEntity
 import com.creativeworkbench.writer.core.data.NoteEntity
 import com.creativeworkbench.writer.core.data.OutlineNodeEntity
 import com.creativeworkbench.writer.core.data.WorkEntity
@@ -86,6 +87,7 @@ class BackupService(
         }
         val notes = db.noteDao().observeAll().first()
         val outline = db.outlineDao().listAll()
+        val foreshadowing = db.foreshadowingDao().listAll()
         val history = historyStore.list()
         BackupBundle(
             schemaVersion = SCHEMA_VERSION,
@@ -95,6 +97,7 @@ class BackupService(
             chapters = chapters,
             notes = notes.map { it.toBackup() },
             outline = outline.map { it.toBackup() },
+            foreshadowing = foreshadowing.map { it.toBackup() },
             aiHistory = history.map { json.encodeToString(AiHistoryBackup.serializer(), it.toBackup()) },
             settings = settings.settings.value.toMap(),
             modules = mapOf("notes" to settings.settings.value.notesEnabled),
@@ -288,6 +291,7 @@ class BackupService(
             db.withTransaction {
                 db.noteDao().deleteAll()
                 db.outlineDao().deleteAll()
+                db.foreshadowingDao().deleteAll()
                 db.chapterDao().deleteAll()
                 db.workDao().deleteAll()
                 bundle.works.forEach { work ->
@@ -333,7 +337,8 @@ class BackupService(
                             pinned = note.pinned,
                             createdAtMs = note.createdAtMs,
                             updatedAtMs = note.updatedAtMs,
-                            sourceNoteId = note.sourceNoteId
+                            sourceNoteId = note.sourceNoteId,
+                            fromChapterId = note.fromChapterId
                         )
                     )
                 }
@@ -349,7 +354,25 @@ class BackupService(
                             content = node.content,
                             orderIndex = node.orderIndex,
                             createdAtMs = node.createdAtMs,
-                            updatedAtMs = node.updatedAtMs
+                            updatedAtMs = node.updatedAtMs,
+                            level = node.level,
+                            targetWords = node.targetWords,
+                            beatRole = node.beatRole
+                        )
+                    )
+                }
+                bundle.foreshadowing.filter { it.workId in workIds }.forEach { item ->
+                    db.foreshadowingDao().insert(
+                        ForeshadowingEntity(
+                            id = item.id,
+                            workId = item.workId,
+                            title = item.title,
+                            detail = item.detail,
+                            plantedChapterId = item.plantedChapterId,
+                            dueChapterId = item.dueChapterId,
+                            paidChapterId = item.paidChapterId,
+                            status = item.status,
+                            priority = item.priority
                         )
                     )
                 }
@@ -598,7 +621,22 @@ class BackupService(
         content = content,
         orderIndex = orderIndex,
         createdAtMs = createdAtMs,
-        updatedAtMs = updatedAtMs
+        updatedAtMs = updatedAtMs,
+        level = level,
+        targetWords = targetWords,
+        beatRole = beatRole
+    )
+
+    private fun ForeshadowingEntity.toBackup() = ForeshadowingBackup(
+        id = id,
+        workId = workId,
+        title = title,
+        detail = detail,
+        plantedChapterId = plantedChapterId,
+        dueChapterId = dueChapterId,
+        paidChapterId = paidChapterId,
+        status = status,
+        priority = priority
     )
 
     private fun NoteEntity.toBackup() = NoteBackup(
@@ -613,7 +651,8 @@ class BackupService(
         pinned = pinned,
         createdAtMs = createdAtMs,
         updatedAtMs = updatedAtMs,
-        sourceNoteId = sourceNoteId
+        sourceNoteId = sourceNoteId,
+        fromChapterId = fromChapterId
     )
 
     private fun AppSettings.toMap(): Map<String, String> = mapOf(

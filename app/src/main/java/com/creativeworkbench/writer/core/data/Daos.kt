@@ -144,6 +144,33 @@ interface OutlineDao {
 }
 
 @Dao
+interface ForeshadowingDao {
+    @Query("SELECT * FROM foreshadowing WHERE workId = :workId ORDER BY status ASC, priority DESC, title ASC")
+    fun observeByWork(workId: String): Flow<List<ForeshadowingEntity>>
+
+    @Query("SELECT * FROM foreshadowing WHERE workId = :workId ORDER BY status ASC, priority DESC, title ASC")
+    suspend fun listByWork(workId: String): List<ForeshadowingEntity>
+
+    @Query("SELECT * FROM foreshadowing ORDER BY workId ASC, title ASC")
+    suspend fun listAll(): List<ForeshadowingEntity>
+
+    @Query("SELECT * FROM foreshadowing WHERE id = :id")
+    suspend fun byId(id: String): ForeshadowingEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(item: ForeshadowingEntity)
+
+    @Query("DELETE FROM foreshadowing WHERE id = :id")
+    suspend fun delete(id: String)
+
+    @Query("DELETE FROM foreshadowing WHERE workId = :workId")
+    suspend fun deleteByWork(workId: String)
+
+    @Query("DELETE FROM foreshadowing")
+    suspend fun deleteAll()
+}
+
+@Dao
 interface SettingDao {
     @Query("SELECT * FROM settings")
     suspend fun all(): List<SettingEntity>

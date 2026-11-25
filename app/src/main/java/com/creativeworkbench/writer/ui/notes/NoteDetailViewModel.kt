@@ -20,7 +20,9 @@ data class NoteDetailState(
     val note: NoteEntity? = null,
     val loading: Boolean = true,
     val saving: Boolean = false,
-    val savedAt: Long? = null
+    val savedAt: Long? = null,
+    /** 同作品章节：设定「从哪一章开始生效」要用。 */
+    val chapters: List<com.creativeworkbench.writer.core.data.ChapterEntity> = emptyList()
 )
 
 class NoteDetailViewModel(
@@ -45,7 +47,10 @@ class NoteDetailViewModel(
                 createdAtMs = System.currentTimeMillis(),
                 updatedAtMs = System.currentTimeMillis()
             )
-            _state.value = NoteDetailState(note = note, loading = false)
+            val chapters = runCatching {
+                note.workId?.let { (application as WorkbenchApp).container.chapters.chapters(it) }
+            }.getOrNull().orEmpty()
+            _state.value = NoteDetailState(note = note, loading = false, chapters = chapters)
         }
     }
 
@@ -58,6 +63,11 @@ class NoteDetailViewModel(
 
     fun setKind(kind: String) = edit { note ->
         note.copy(kind = kind, workId = if (NoteKind.requiresWork(kind)) note.workId ?: initialWorkId else note.workId)
+    }
+
+    /** 设定从哪一章开始生效（null = 全篇）。 */
+    fun setFromChapter(chapterId: String?) = edit { note ->
+        note.copy(fromChapterId = chapterId)
     }
 
     fun setAiReference(value: Boolean) = edit { note ->

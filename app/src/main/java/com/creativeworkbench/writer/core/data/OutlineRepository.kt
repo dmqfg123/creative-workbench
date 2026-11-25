@@ -30,7 +30,9 @@ class OutlineRepository(private val db: WorkbenchDatabase) {
         workId: String,
         chapterId: String?,
         title: String,
-        content: String
+        content: String,
+        targetWords: Int? = null,
+        beatRole: String? = null
     ): OutlineNodeEntity = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
         val node = OutlineNodeEntity(
@@ -41,23 +43,49 @@ class OutlineRepository(private val db: WorkbenchDatabase) {
             content = content.trim(),
             orderIndex = db.outlineDao().maxOrder(workId) + 1,
             createdAtMs = now,
-            updatedAtMs = now
+            updatedAtMs = now,
+            targetWords = targetWords,
+            beatRole = beatRole
         )
         db.outlineDao().insert(node)
         node
     }
 
-    suspend fun update(id: String, title: String, content: String, chapterId: String?) =
-        withContext(Dispatchers.IO) {
-            val node = db.outlineDao().byId(id) ?: return@withContext
-            db.outlineDao().insert(
-                node.copy(
-                    title = title.trim().ifEmpty { node.title },
-                    content = content.trim(),
-                    chapterId = chapterId,
-                    updatedAtMs = System.currentTimeMillis()
-                )
+    suspend fun update(
+        id: String,
+        title: String,
+        content: String,
+        chapterId: String?,
+        targetWords: Int? = null,
+        beatRole: String? = null
+    ) = withContext(Dispatchers.IO) {
+        val node = db.outlineDao().byId(id) ?: return@withContext
+        db.outlineDao().insert(
+            node.copy(
+                title = title.trim().ifEmpty { node.title },
+                content = content.trim(),
+                chapterId = chapterId,
+                targetWords = targetWords,
+                beatRole = beatRole,
+                updatedAtMs = System.currentTimeMillis()
             )
+        )
+    }
+
+    /**
+     * 套用模板：按顺序把每个 beat 绑到第 i 章；章节不够就落成全书级节点。
+     * 只追加，不覆盖现有节点（用户可能已经写了几条）。
+     */
+    suspend fun applyTemplate(workId: String, chapterIds: List<String>, beats: List<Pair<String, String>>) =
+        withContext(Dispatchers.IO) {
+            beats.forEachIndexed { index, beat ->
+                create(
+                    workId = workId,
+                    chapterId = chapterIds.getOrNull(index),
+                    title = beat.first,
+                    content = beat.second
+                )
+            }
         }
 
     suspend fun delete(id: String) = withContext(Dispatchers.IO) { db.outlineDao().delete(id) }

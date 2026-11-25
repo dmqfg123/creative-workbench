@@ -781,6 +781,10 @@ fun EditorScreen(
                 aiViewModel.setIncludeNotes(on)
                 reprepareAi()
             },
+            onToggleFollowOutline = { on ->
+                aiViewModel.setFollowOutline(on)
+                reprepareAi()
+            },
             onToggleAllNotes = { includeAll ->
                 aiViewModel.setNotesExcluded(aiContextNotes.map { it.id }, excluded = !includeAll)
                 reprepareAi()

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,13 +25,17 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,7 +49,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.creativeworkbench.writer.core.data.ForeshadowingEntity
 import com.creativeworkbench.writer.core.data.OutlineNodeEntity
+import com.creativeworkbench.writer.core.data.OutlineTemplates
+import com.creativeworkbench.writer.ui.design.GhostButton
 import com.creativeworkbench.writer.ui.design.IconAction
 import com.creativeworkbench.writer.ui.design.PillButton
 import com.creativeworkbench.writer.ui.design.Tag
@@ -53,16 +61,15 @@ import com.creativeworkbench.writer.ui.outline.OutlineViewModel
 import com.creativeworkbench.writer.ui.outline.OutlineViewModelFactory
 
 /**
- * 大纲：一部作品一条有序列表，节点可以绑定到某一章。
- * AI 生成正文时只喂「本章 + 前后各一章 + 全书级」节点（见 AiContextBuilder.renderOutline），
- * 不会把整本书的大纲都塞进 token。
+ * 大纲：一部作品一条有序列表，节点可绑定章节、可设目标字数。
+ * AI 生成正文时只喂「本章 + 前后各一章 + 全书级」节点；未回收伏笔强制带上。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OutlineScreen(
     workId: String,
     highlightChapterId: String?,
     onBack: () -> Unit,
-    /** 点「第 N 章」标签直接跳到那一章的编辑器。 */
     onOpenChapter: (String) -> Unit = {}
 ) {
     val application = LocalContext.current.applicationContext as Application
@@ -74,10 +81,12 @@ fun OutlineScreen(
     var editing by remember { mutableStateOf<OutlineNodeEntity?>(null) }
     var creating by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf<OutlineNodeEntity?>(null) }
+    var showTemplates by remember { mutableStateOf(false) }
+    var showForeshadow by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 12.dp, top = 10.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconAction(
@@ -94,6 +103,12 @@ fun OutlineScreen(
                 )
             }
             IconAction(
+                icon = Icons.Default.List,
+                contentDescription = "套用模板",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                onClick = { showTemplates = true }
+            )
+            IconAction(
                 icon = Icons.Default.Add,
                 contentDescription = "新建大纲节点",
                 tint = MaterialTheme.colorScheme.primary,
@@ -106,27 +121,8 @@ fun OutlineScreen(
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            if (state.nodes.isEmpty() && !state.loading) {
+            if (state.nodes.isNotEmpty() || state.foreshadowing.isNotEmpty()) {
                 item {
-                    Column(Modifier.fillMaxWidth().padding(top = 40.dp)) {
-                        Text(
-                            "还没有大纲",
-                            style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        )
-                        Text(
-                            "一条 = 一个剧情点。AI 只带本章与相邻章节。",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.height(16.dp))
-                        PillButton(text = "新建第一条", icon = Icons.Default.Add, onClick = { creating = true })
-                    }
-                }
-            }
-            if (state.nodes.isNotEmpty()) {
-                item {
-                    // 结构诊断（借鉴 Fictionary 的 Story Map：把「空缺」画出来，比给一段 AI 评语有用）
                     val noOutline = state.chapters.count { chapter ->
                         state.nodes.none { it.chapterId == chapter.id }
                     }
@@ -139,7 +135,33 @@ fun OutlineScreen(
                         Tag(state.nodes.size.toString() + " 条大纲", active = true)
                         if (noOutline > 0) Tag(noOutline.toString() + " 章还没大纲", active = true)
                         if (noContent > 0) Tag(noContent.toString() + " 条没写要点", active = true)
-                        if (noOutline == 0 && noContent == 0) Tag("每章都有大纲", active = true)
+                        Tag(
+                            text = if (state.openForeshadow.isEmpty()) "伏笔都收了"
+                            else "未回收伏笔 " + state.openForeshadow.size,
+                            active = state.openForeshadow.isNotEmpty(),
+                            onClick = { showForeshadow = true }
+                        )
+                    }
+                }
+            }
+            if (state.nodes.isEmpty() && !state.loading) {
+                item {
+                    Column(Modifier.fillMaxWidth().padding(top = 32.dp)) {
+                        Text(
+                            "还没有大纲",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        Text(
+                            "一条 = 一个剧情点。AI 只带本章与相邻章节。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            PillButton(text = "新建第一条", icon = Icons.Default.Add, onClick = { creating = true })
+                            GhostButton(text = "套模板", onClick = { showTemplates = true })
+                        }
                     }
                 }
             }
@@ -170,7 +192,6 @@ fun OutlineScreen(
                             Spacer(Modifier.width(6.dp))
                         }
                         if (node.chapterId != null) {
-                            // 点标签跳章：大纲看到「第 3 章」，一下就到正文，不用回目录翻
                             Tag(
                                 text = chapterLabel ?: "第 N 章",
                                 active = true,
@@ -190,18 +211,27 @@ fun OutlineScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    // 联动：这条大纲绑的章写了多少字（0 字 = 还没动笔）
-                    node.chapterId?.let { chapterId ->
-                        val chapter = state.chapters.firstOrNull { it.id == chapterId }
-                        if (chapter != null) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                "正文 " + chapter.wordCount + " 字",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (chapter.wordCount == 0L) MaterialTheme.colorScheme.onSurfaceVariant
-                                else MaterialTheme.colorScheme.primary
-                            )
-                        }
+                    val chapter = node.chapterId?.let { id -> state.chapters.firstOrNull { it.id == id } }
+                    val target = node.targetWords ?: 0
+                    if (chapter != null || target > 0) {
+                        Spacer(Modifier.height(4.dp))
+                        val written = chapter?.wordCount ?: 0L
+                        val over = target > 0 && written > target
+                        Text(
+                            buildString {
+                                if (chapter != null) append("正文 ").append(written).append(" 字")
+                                if (target > 0) {
+                                    if (chapter != null) append(" · ")
+                                    append("目标 ").append(target).append(" 字")
+                                }
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = when {
+                                over -> MaterialTheme.colorScheme.primary
+                                written == 0L -> MaterialTheme.colorScheme.onSurfaceVariant
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
                     }
                     Spacer(Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -232,15 +262,38 @@ fun OutlineScreen(
                 creating = false
                 editing = null
             },
-            onSave = { title, content, chapterId ->
+            onSave = { title, content, chapterId, targetWords ->
                 if (node != null) {
-                    viewModel.update(node.id, title, content, chapterId)
+                    viewModel.update(node.id, title, content, chapterId, targetWords)
                 } else {
-                    viewModel.create(title, content, chapterId)
+                    viewModel.create(title, content, chapterId, targetWords)
                 }
                 creating = false
                 editing = null
             }
+        )
+    }
+
+    if (showTemplates) {
+        TemplateSheet(
+            onPick = { template ->
+                viewModel.applyTemplate(template)
+                showTemplates = false
+            },
+            onDismiss = { showTemplates = false }
+        )
+    }
+
+    if (showForeshadow) {
+        ForeshadowSheet(
+            items = state.foreshadowing,
+            chapters = state.chapters,
+            onCreate = { title, detail, planted, due ->
+                viewModel.addForeshadow(title, detail, planted, due)
+            },
+            onMarkPaid = { item, chapterId -> viewModel.markForeshadowPaid(item, chapterId) },
+            onDelete = { viewModel.deleteForeshadow(it) },
+            onDismiss = { showForeshadow = false }
         )
     }
 
@@ -279,17 +332,235 @@ private fun SmallAction(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TemplateSheet(
+    onPick: (OutlineTemplates.Template) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 8.dp)) {
+            Text("套用模板", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "会按章节顺序新建节点，不覆盖已有大纲。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            OutlineTemplates.all.forEach { template ->
+                WbCard(
+                    modifier = Modifier.padding(vertical = 4.dp),
+                    onClick = { onPick(template) },
+                    contentPadding = PaddingValues(14.dp)
+                ) {
+                    Text(template.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        template.note + " · " + template.beats.size + " 条",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ForeshadowSheet(
+    items: List<ForeshadowingEntity>,
+    chapters: List<com.creativeworkbench.writer.core.data.ChapterEntity>,
+    onCreate: (title: String, detail: String, plantedChapterId: String?, dueChapterId: String?) -> Unit,
+    onMarkPaid: (ForeshadowingEntity, String?) -> Unit,
+    onDelete: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var adding by remember { mutableStateOf(false) }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding()) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("伏笔", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "未回收 " + items.count { it.status != "paid" && it.status != "abandoned" } + " 条",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                TextButton(onClick = { adding = true }) { Text("加一条") }
+            }
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
+                items(items, key = { it.id }) { item ->
+                    val planted = chapters.indexOfFirst { it.id == item.plantedChapterId }
+                    val due = chapters.indexOfFirst { it.id == item.dueChapterId }
+                    WbCard(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(12.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                item.title,
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Tag(
+                                text = when (item.status) {
+                                    "paid" -> "已回收"
+                                    "reinforced" -> "强化中"
+                                    "abandoned" -> "弃用"
+                                    else -> "待回收"
+                                },
+                                active = item.status != "paid" && item.status != "abandoned"
+                            )
+                        }
+                        if (item.detail.isNotBlank()) {
+                            Text(
+                                item.detail,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Text(
+                            buildString {
+                                if (planted >= 0) append("埋在第 ").append(planted + 1).append(" 章")
+                                if (due >= 0) {
+                                    if (planted >= 0) append(" · ")
+                                    append("计划第 ").append(due + 1).append(" 章回收")
+                                }
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (item.status != "paid") {
+                                TextButton(onClick = { onMarkPaid(item, null) }) { Text("标记已回收") }
+                            }
+                            Spacer(Modifier.weight(1f))
+                            IconButton(onClick = { onDelete(item.id) }, modifier = Modifier.size(36.dp)) {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = "删除伏笔",
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+
+    if (adding) {
+        ForeshadowDialog(
+            chapters = chapters,
+            onDismiss = { adding = false },
+            onSave = { title, detail, planted, due ->
+                onCreate(title, detail, planted, due)
+                adding = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun ForeshadowDialog(
+    chapters: List<com.creativeworkbench.writer.core.data.ChapterEntity>,
+    onDismiss: () -> Unit,
+    onSave: (title: String, detail: String, plantedChapterId: String?, dueChapterId: String?) -> Unit
+) {
+    var title by remember { mutableStateOf("") }
+    var detail by remember { mutableStateOf("") }
+    var planted by remember { mutableStateOf<String?>(null) }
+    var due by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("新埋伏笔") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("伏笔") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = detail,
+                    onValueChange = { detail = it },
+                    label = { Text("细节（谁看到的、什么东西）") },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp, max = 140.dp)
+                )
+                Spacer(Modifier.height(8.dp))
+                Text("埋在哪章", style = MaterialTheme.typography.labelSmall)
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    chapters.take(20).forEachIndexed { index, chapter ->
+                        Tag(
+                            (index + 1).toString() + " 章",
+                            active = planted == chapter.id,
+                            onClick = { planted = chapter.id }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Text("计划哪章回收", style = MaterialTheme.typography.labelSmall)
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    chapters.take(20).forEachIndexed { index, chapter ->
+                        Tag(
+                            (index + 1).toString() + " 章",
+                            active = due == chapter.id,
+                            onClick = { due = chapter.id }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(title, detail, planted, due) }) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        shape = MaterialTheme.shapes.large
+    )
+}
+
 @Composable
 private fun OutlineEditorDialog(
     node: OutlineNodeEntity?,
     chapters: List<com.creativeworkbench.writer.core.data.ChapterEntity>,
     defaultChapterId: String?,
     onDismiss: () -> Unit,
-    onSave: (title: String, content: String, chapterId: String?) -> Unit
+    onSave: (title: String, content: String, chapterId: String?, targetWords: Int?) -> Unit
 ) {
     var title by remember { mutableStateOf(node?.title.orEmpty()) }
     var content by remember { mutableStateOf(node?.content.orEmpty()) }
     var chapterId by remember { mutableStateOf(node?.chapterId ?: defaultChapterId) }
+    var targetWords by remember { mutableStateOf(node?.targetWords ?: 0) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (node == null) "新建大纲节点" else "编辑大纲节点") },
@@ -298,19 +569,30 @@ private fun OutlineEditorDialog(
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
-                    label = { Text("标题（一句话说清这段写什么）") },
+                    label = { Text("标题") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = content,
                     onValueChange = { content = it },
                     label = { Text("要点") },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp, max = 200.dp)
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 90.dp, max = 180.dp)
                 )
-                Spacer(Modifier.height(10.dp))
-                Text("绑定章节", style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.height(8.dp))
+                Text("目标字数", style = MaterialTheme.typography.labelSmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(0, 500, 1000, 2000, 3000).forEach { value ->
+                        Tag(
+                            text = if (value == 0) "不设" else value.toString(),
+                            active = targetWords == value,
+                            onClick = { targetWords = value }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Text("绑定章节", style = MaterialTheme.typography.labelSmall)
                 Row(
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -327,7 +609,9 @@ private fun OutlineEditorDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(title, content, chapterId) }) { Text("保存") }
+            TextButton(onClick = {
+                onSave(title, content, chapterId, targetWords.takeIf { it > 0 })
+            }) { Text("保存") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
         shape = MaterialTheme.shapes.large

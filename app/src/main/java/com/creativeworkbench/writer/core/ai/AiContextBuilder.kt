@@ -3,6 +3,7 @@ package com.creativeworkbench.writer.core.ai
 import com.creativeworkbench.writer.core.data.Block
 import com.creativeworkbench.writer.core.data.ChapterEntity
 import com.creativeworkbench.writer.core.data.ChapterRepository
+import com.creativeworkbench.writer.core.data.ForeshadowingRepository
 import com.creativeworkbench.writer.core.data.NoteEntity
 import com.creativeworkbench.writer.core.data.NoteKind
 import com.creativeworkbench.writer.core.data.NoteRepository
@@ -55,7 +56,9 @@ data class ContextOptions(
     val includeNoteSources: Boolean = true,
     val includeOutline: Boolean = true,
     val includeBody: Boolean = true,
-    val bodyRange: BodyRange = BodyRange.Whole
+    val bodyRange: BodyRange = BodyRange.Whole,
+    /** 「按大纲推进」：把本章边界与目标字数写成硬约束（默认关，开了才发）。 */
+    val followOutline: Boolean = false
 )
 
 /**
@@ -66,7 +69,8 @@ data class ContextOptions(
 class AiContextBuilder(
     private val chapters: ChapterRepository,
     private val noteRepository: NoteRepository,
-    private val outlineRepository: OutlineRepository
+    private val outlineRepository: OutlineRepository,
+    private val foreshadowingRepository: ForeshadowingRepository
 ) {
     suspend fun prepare(
         action: AiActionSpec,
@@ -94,6 +98,16 @@ class AiContextBuilder(
         val withBody = options.includeBody || action.id == AiActions.CHECK
         val withNotes = options.includeNoteSources
 
+        // 设定生效章节（抄 Novelcrafter 的 Codex Progressions）：
+        // 写在第三章才成立的设定，不该在第一章的上下文里出现，否则模型会提前埋错伏笔。
+        val orderOfChapter = chapterList.withIndex().associate { it.value.id to it.index }
+        val currentOrder = orderOfChapter[chapterId] ?: 0
+        fun activeInThisChapter(note: NoteEntity): Boolean {
+            val from = note.fromChapterId ?: return true
+            val fromOrder = orderOfChapter[from] ?: return true
+            return currentOrder >= fromOrder
+        }
+
         // 前一章结尾 500 字：既进上下文，也用来判断设定命中。
         val currentIndex = chapterList.indexOfFirst { it.id == chapterId }
         val prevChapter = if (currentIndex > 0) chapterList[currentIndex - 1] else null
@@ -106,7 +120,8 @@ class AiContextBuilder(
         // 设定类：当前作品的全部人物/设定，强制注入。
         val settingNotes = if (withNotes) {
             allNotes.filter {
-                it.workId == workId && NoteKind.setting.contains(it.kind) && it.id !in options.excludedNoteIds
+                it.workId == workId && NoteKind.setting.contains(it.kind) &&
+                    it.id !in options.excludedNoteIds && activeInThisChapter(it)
             }
         } else {
             emptyList()
@@ -133,7 +148,8 @@ class AiContextBuilder(
         val materialNotes = if (withNotes) {
             allNotes.filter {
                 (it.workId == null || it.workId == workId) &&
-                    NoteKind.material.contains(it.kind) && it.aiReference && it.id !in options.excludedNoteIds
+                    NoteKind.material.contains(it.kind) && it.aiReference &&
+                    it.id !in options.excludedNoteIds && activeInThisChapter(it)
             }.sortedBy { it.id }
         } else {
             emptyList()
@@ -151,6 +167,19 @@ class AiContextBuilder(
             runCatching { outlineRepository.list(workId) }.getOrDefault(emptyList())
         } else {
             emptyList()
+        }
+        // 未回收伏笔：写正文时强制带上（抄 long-novel-writer「写前加载全部未回收条目」）
+        val openForeshadow = if (options.includeOutline) {
+            runCatching { foreshadowingRepository.unsettled(workId) }.getOrDefault(emptyList())
+        } else {
+            emptyList()
+        }
+        val foreshadowText = openForeshadow.take(12).joinToString("\n") { item ->
+            val due = item.dueChapterId?.let { id ->
+                val index = chapterList.indexOfFirst { it.id == id }
+                if (index >= 0) "，计划第 " + (index + 1) + " 章回收" else ""
+            } ?: ""
+            "· " + item.title + if (item.detail.isNotBlank()) "：" + item.detail.take(60) else "" + due
         }
         val outlineEntries = renderOutline(outlineNodes, chapterList, chapterId, currentIndex)
         val outlineFit = PromptBudget.fitEntries(outlineEntries, outlineCap, "大纲", keepTail = true)
@@ -234,6 +263,10 @@ class AiContextBuilder(
                 appendLine("【大纲（本章及前后章）】")
                 appendLine(outlineText)
             }
+            if (foreshadowText.isNotBlank()) {
+                appendLine("【未回收伏笔（共 " + openForeshadow.size + " 条，写的时候留意回收或强化）】")
+                appendLine(foreshadowText)
+            }
             if (settingText.isNotBlank()) {
                 appendLine("【设定（强制注入，共 " + injection.kept.size + " 条）】")
                 appendLine(settingText)
@@ -263,6 +296,15 @@ class AiContextBuilder(
             if (selection != null) {
                 appendLine("【选中文字】")
                 appendLine(selection.text)
+            }
+            // 「按大纲推进」：把边界写成硬约束（片段来自 AI_NovelGenerator 的 chapter plan 提示词）
+            if (options.followOutline && outlineText.isNotBlank() &&
+                (action.id == AiActions.CONTINUE || action.id == AiActions.EXPAND)
+            ) {
+                appendLine("【本章边界】")
+                appendLine("- 只写第 " + (currentIndex + 1) + " 章；后面章节的目标是后续边界，不要提前写完。")
+                appendLine("- 本章要推进的点见【大纲】；用行动和结果完成，不能用「决定以后再查」代替。")
+                appendLine("- 篇幅：约 " + options.lengthChars + " 字，允许 ±15%。")
             }
             appendLine("【任务】")
             append(
@@ -309,6 +351,7 @@ class AiContextBuilder(
         val sources = buildList {
             if (withBody) add("正文")
             if (outlineText.isNotBlank()) add("大纲")
+            if (foreshadowText.isNotBlank()) add("伏笔 " + openForeshadow.size)
             if (settingText.isNotBlank() || materialText.isNotBlank()) add("笔记")
         }
 
@@ -359,7 +402,9 @@ class AiContextBuilder(
                     if (index >= 0) "第 " + (index + 1) + " 章 " else ""
                 } ?: ""
                 val head = node.title + if (node.content.isNotBlank()) "：" + node.content else ""
-                ("大纲·" + node.title) to ("· " + chapterLabel + head)
+                // 目标字数进提示词：让模型知道这一点大概写多少，别一条要点灌 3000 字
+                val target = node.targetWords?.takeIf { it > 0 }?.let { "（目标约 " + it + " 字）" } ?: ""
+                ("大纲·" + node.title) to ("· " + chapterLabel + head + target)
             }
     }
 

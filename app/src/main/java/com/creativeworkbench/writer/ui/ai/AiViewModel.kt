@@ -60,6 +60,8 @@ data class AiUiState(
     val includeNotes: Boolean = true,
     /** 正文带多少：整章或光标前后 N 段。 */
     val bodyRange: BodyRange = BodyRange.Whole,
+    /** 「按大纲推进」：把本章边界/目标字数写进提示词。 */
+    val followOutline: Boolean = false,
     /** 已经因为撞 max_tokens 自动续写过几次。 */
     val continuedRounds: Int = 0,
     /** 思考模式的思维链字数（只显示「正在思考…」用，不写进结果）。 */
@@ -76,7 +78,8 @@ class AiViewModel(
     private val container = (application as WorkbenchApp).container
     private val configStore = container.aiConfig
     private val client = AiClient()
-    private val builder = AiContextBuilder(container.chapters, container.notes, container.outline)
+    private val builder =
+        AiContextBuilder(container.chapters, container.notes, container.outline, container.foreshadowing)
     private val historyStore = container.aiHistory
     private val _state = MutableStateFlow(
         AiUiState(
@@ -95,7 +98,8 @@ class AiViewModel(
         includeNoteSources = _state.value.includeNotes,
         includeOutline = _state.value.includeOutline,
         includeBody = _state.value.includeBody,
-        bodyRange = _state.value.bodyRange
+        bodyRange = _state.value.bodyRange,
+        followOutline = _state.value.followOutline
     )
 
     fun prepare(
@@ -379,6 +383,10 @@ class AiViewModel(
 
     fun setIncludeOutline(value: Boolean) {
         _state.value = _state.value.copy(includeOutline = value)
+    }
+
+    fun setFollowOutline(value: Boolean) {
+        _state.value = _state.value.copy(followOutline = value)
     }
 
     fun setIncludeNotes(value: Boolean) {

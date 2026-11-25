@@ -286,6 +286,31 @@ fun NoteDetailScreen(
                 }
             )
 
+            // 设定从哪一章开始生效：抄 Novelcrafter 的 Codex Progressions——
+            // 第三章才成立的设定，不该在第一章的上下文里出现。
+            if (NoteKind.setting.contains(note.kind) && state.chapters.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                Text("从哪一章开始生效", style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Tag(
+                        text = "全篇",
+                        active = note.fromChapterId == null,
+                        onClick = { viewModel.setFromChapter(null) }
+                    )
+                    state.chapters.take(30).forEachIndexed { index, chapter ->
+                        Tag(
+                            (index + 1).toString() + " 章",
+                            active = note.fromChapterId == chapter.id,
+                            onClick = { viewModel.setFromChapter(chapter.id) }
+                        )
+                    }
+                }
+            }
+
             // 只有素材类（灵感/片段/对白）有得选，才给开关。
             // 人物/设定固定参与、备忘不参与——放个点不动的开关只会骗人。
             if (NoteKind.material.contains(note.kind)) {

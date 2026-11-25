@@ -13,6 +13,8 @@ data class BackupBundle(
     val notes: List<NoteBackup> = emptyList(),
     /** 大纲节点。0.13.3 起进备份：之前导出的旧包没有这个字段，恢复后大纲为空（不报错）。 */
     val outline: List<OutlineBackup> = emptyList(),
+    /** 伏笔账本（0.14.0 起）。旧包无此字段，恢复后为空。 */
+    val foreshadowing: List<ForeshadowingBackup> = emptyList(),
     val aiHistory: List<String> = emptyList(),
     val settings: Map<String, String> = emptyMap(),
     val modules: Map<String, Boolean> = emptyMap(),
@@ -60,7 +62,8 @@ data class NoteBackup(
     val pinned: Boolean,
     val createdAtMs: Long,
     val updatedAtMs: Long,
-    val sourceNoteId: String? = null
+    val sourceNoteId: String? = null,
+    val fromChapterId: String? = null
 )
 
 @Serializable
@@ -72,7 +75,23 @@ data class OutlineBackup(
     val content: String = "",
     val orderIndex: Int,
     val createdAtMs: Long,
-    val updatedAtMs: Long
+    val updatedAtMs: Long,
+    val level: Int? = null,
+    val targetWords: Int? = null,
+    val beatRole: String? = null
+)
+
+@Serializable
+data class ForeshadowingBackup(
+    val id: String,
+    val workId: String,
+    val title: String,
+    val detail: String = "",
+    val plantedChapterId: String? = null,
+    val dueChapterId: String? = null,
+    val paidChapterId: String? = null,
+    val status: String = "planted",
+    val priority: Int = 1
 )
 
 @Serializable
