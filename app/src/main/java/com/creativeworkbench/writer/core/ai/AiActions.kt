@@ -24,7 +24,9 @@ object AiActions {
             result = ResultKind.Text,
             write = WriteTarget.BodyAppend,
             whenCondition = ActionWhen.NoSelection,
-            priority = 30
+            priority = 30,
+            // 续写是高频动作：输出给 4K token（约 6800 字）足够，别用 384K 上限等它跑飞
+            tuning = ActionTuning(maxTokens = 4096)
         ),
         AiActionSpec(
             id = REWRITE,
@@ -39,7 +41,8 @@ object AiActions {
             result = ResultKind.Diff,
             write = WriteTarget.BodyReplaceSelection,
             whenCondition = ActionWhen.HasSelection,
-            priority = 20
+            priority = 20,
+            tuning = ActionTuning(maxTokens = 4096)
         ),
         AiActionSpec(
             id = CHECK,
@@ -53,7 +56,9 @@ object AiActions {
             result = ResultKind.IssueList,
             write = WriteTarget.None,
             whenCondition = ActionWhen.ChapterNotEmpty,
-            priority = 10
+            priority = 10,
+            // 检查要输出 JSON：条数多时 4K 会截断，给 6K
+            tuning = ActionTuning(maxTokens = 6144)
         )
     )
 

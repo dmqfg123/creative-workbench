@@ -267,7 +267,13 @@ fun AiSettingsScreen(onBack: () -> Unit) {
 @Composable
 private fun AutoParamsCard(config: AiConfig) {
     val profile = config.profile
-    val temperature = profile.temperature?.let { it.toString() } ?: "不发（思考模式忽略）"
+    val params = config.effectiveParams
+    val mode = when {
+        !profile.supportsThinking -> profile.label
+        params.thinking -> "DeepSeek · 深度思考"
+        else -> "DeepSeek · 快速"
+    }
+    val temperature = params.temperature?.toString() ?: "不发（思考模式忽略）"
     Surface(
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -276,15 +282,15 @@ private fun AutoParamsCard(config: AiConfig) {
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
             Text(
-                "自动套用 · " + profile.label,
+                "自动套用 · " + mode,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Medium
             )
             Spacer(Modifier.height(6.dp))
             ParamLine("上下文窗口", formatTokens(profile.contextWindowTokens) + " tokens（每次最多带 " + formatTokens(profile.budgetWindowTokens) + "）")
-            ParamLine("单次输出上限", formatTokens(profile.requestMaxTokens) + " tokens")
+            ParamLine("单次输出上限", formatTokens(params.maxTokens) + " tokens")
             ParamLine("temperature", temperature)
-            ParamLine("超时", profile.timeoutSeconds.toString() + " 秒")
+            ParamLine("超时", params.timeoutSeconds.toString() + " 秒")
             Spacer(Modifier.height(6.dp))
             Text(
                 "这些按模型自动给，不用手填；填错只会让服务端报 400。",

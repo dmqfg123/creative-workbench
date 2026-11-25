@@ -177,6 +177,10 @@ class AiContextBuilder(
             }
             appendLine("【当前章（每段前的 [[id]] 是段落标记）】")
             appendLine(chapterText)
+            if (anchorIndex != null && action.id == AiActions.CONTINUE) {
+                // 续写位置写成独立一行：正文本身保持与上次调用逐字一致，缓存才命中
+                appendLine("【续写位置】从第 " + (anchorIndex + 1) + " 段（" + markerOf(anchorIndex) + "）之后接着写。")
+            }
             if (selection != null) {
                 appendLine("【选中文字】")
                 appendLine(selection.text)
@@ -229,8 +233,11 @@ class AiContextBuilder(
         )
     }
 
+    /** 段落标记名，和正文里的 [[bN]] 对齐。 */
+    private fun markerOf(index: Int): String = "b" + index
+
     private fun actionInstruction(action: AiActionSpec, selection: SelectionInfo?): String = when (action.id) {
-        AiActions.CONTINUE -> "紧接【当前章】最后一段之后续写 300-600 字，不要重复已有句子，不要解释。"
+        AiActions.CONTINUE -> "从【续写位置】指定的那一段之后接着写 300-600 字，不要重复已有句子，不要解释。"
         AiActions.REWRITE -> "改写【选中文字】这一段，保持情节和信息不变，长度接近原文。只输出改写后的文字。"
         AiActions.CHECK ->
             "检查【当前章】，输出严格 JSON（不要代码围栏）：" +

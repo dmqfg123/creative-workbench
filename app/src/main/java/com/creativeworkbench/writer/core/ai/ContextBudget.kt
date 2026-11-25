@@ -37,9 +37,10 @@ object PromptBudget {
         kind: String = "正文"
     ): FitResult {
         if (indices.isEmpty()) return FitResult("", 0, 0, emptyList())
-        fun render(index: Int): String =
-            "[[b" + index + "]] " + blocks[index].text +
-                if (anchorIndex != null && index == anchorIndex) "  ← 从这里续写" else ""
+        // 正文渲染必须稳定：DeepSeek 的上下文缓存按「完全一致的公共前缀」命中，
+        // 在正文里插「← 从这里续写」这类随光标变的标记，会把这一段之后的缓存全废掉。
+        // 续写位置改成正文之后的一行说明（见 AiContextBuilder）。
+        fun render(index: Int): String = "[[b" + index + "]] " + blocks[index].text
         val kept = indices.toMutableList()
         val dropped = mutableListOf<ContextExclusion>()
         var tokens = kept.sumOf { TokenEstimator.estimate(render(it)) }

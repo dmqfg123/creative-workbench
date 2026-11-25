@@ -133,7 +133,7 @@ class AiViewModel(
                 ChatMessage("system", prepared.system),
                 ChatMessage("user", prepared.user)
             )
-            when (val result = client.chat(config, apiKey, messages)) {
+            when (val result = client.chat(config, apiKey, messages, action.tuning)) {
                 is AiCallResult.Error -> {
                     _state.value = _state.value.copy(generating = false, error = result.message)
                 }

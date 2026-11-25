@@ -48,28 +48,15 @@ class AiClient {
     suspend fun chat(
         config: AiConfig,
         apiKey: String,
-        messages: List<ChatMessage>
+        messages: List<ChatMessage>,
+        tuning: ActionTuning = ActionTuning()
     ): AiCallResult = withContext(Dispatchers.IO) {
         val endpoint = endpointFor(config)
             ?: return@withContext AiCallResult.Error("Base URL 不合法：只支持 https；打开「允许明文 HTTP」后才允许 http")
-        val profile = config.profile
-        val payload = JSONObject().apply {
-            put("model", config.model)
-            // 参数全部来自模型表：思考模式不发 temperature，省得服务端忽略还让人以为设了有用。
-            profile.temperature?.let { put("temperature", it) }
-            put("max_tokens", profile.requestMaxTokens)
-            if (profile.supportsThinking) {
-                put("thinking", JSONObject().put("type", if (config.deepThinking) "enabled" else "disabled"))
-            }
-            put("stream", false)
-            put("messages", JSONArray().apply {
-                messages.forEach { message ->
-                    put(JSONObject().put("role", message.role).put("content", message.content))
-                }
-            })
-        }
+        val params = config.profile.request(tuning, config.deepThinking)
+        val payload = buildPayload(config, tuning, messages)
 
-        val timeout = profile.timeoutSeconds.toLong()
+        val timeout = params.timeoutSeconds.toLong()
         val client = OkHttpClient.Builder()
             .connectTimeout(20L, TimeUnit.SECONDS)
             .readTimeout(timeout, TimeUnit.SECONDS)
@@ -116,6 +103,34 @@ class AiClient {
         }
         } finally {
             cancelHandle?.dispose()
+        }
+    }
+
+    /**
+     * 请求体：DeepSeek 专用的 thinking 只发给 DeepSeek，通用兼容服务一个字段都不多给，
+     * 免得远端把不认识的字段当 400。
+     */
+    internal fun buildPayload(
+        config: AiConfig,
+        tuning: ActionTuning,
+        messages: List<ChatMessage>
+    ): JSONObject {
+        val profile = config.profile
+        val params = profile.request(tuning, config.deepThinking)
+        return JSONObject().apply {
+            put("model", config.model)
+            // 参数：动作策略覆盖模型默认；思考模式不发 temperature，省得服务端忽略还让人以为设了有用。
+            params.temperature?.let { put("temperature", it) }
+            put("max_tokens", params.maxTokens)
+            if (profile.supportsThinking) {
+                put("thinking", JSONObject().put("type", if (params.thinking) "enabled" else "disabled"))
+            }
+            put("stream", false)
+            put("messages", JSONArray().apply {
+                messages.forEach { message ->
+                    put(JSONObject().put("role", message.role).put("content", message.content))
+                }
+            })
         }
     }
 

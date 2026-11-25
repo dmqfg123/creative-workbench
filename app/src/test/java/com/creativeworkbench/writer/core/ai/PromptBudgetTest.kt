@@ -53,7 +53,7 @@ class PromptBudgetTest {
     @Test
     fun entriesDropEarliestFirstWhenKeepTail() {
         val entries = (1..5).map { "第" + it + "章" to "第" + it + "章：" + "字".repeat(60) }
-        val fit = PromptBudget.fitEntries(entries, 300, "摘要", keepTail = true)
+        val fit = PromptBudget.fitEntries(entries, 150, "摘要", keepTail = true)
         assertTrue(fit.text.contains("第5章"))
         assertTrue(fit.dropped.any { it.label == "第1章" })
     }
@@ -61,7 +61,7 @@ class PromptBudgetTest {
     @Test
     fun entriesDropLatestFirstWhenNotKeepTail() {
         val entries = (1..5).map { "素材" + it to "素材" + it + "：" + "字".repeat(60) }
-        val fit = PromptBudget.fitEntries(entries, 300, "素材", keepTail = false)
+        val fit = PromptBudget.fitEntries(entries, 150, "素材", keepTail = false)
         assertTrue(fit.text.contains("素材1"))
         assertTrue(fit.dropped.any { it.label == "素材5" })
     }
