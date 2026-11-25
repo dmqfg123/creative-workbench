@@ -4,13 +4,13 @@
 
 ## 状态
 
-- 版本：**0.11.0**（versionCode 22，未打 tag）；S1–S5 全部落地。
-- 0.11.0 状态：按使用反馈重做 AI 参数 / 假按钮 / 编辑器交互；**只编译过（compileReleaseKotlin），未构建 APK、未装机、未跑单测**。回归清单见 项目\待办_0.11.0真机回归_20261125.md。
-- 上一个可安装版本：0.10.0（versionCode 21，tag v0.10.0，APK 在 apk/）。
+- 版本：**0.11.0**（versionCode 22，tag `v0.11.0`）；S1–S5 全部落地。
+- 0.11.0 内容：使用反馈整改（AI 参数自动套 / 去掉不可点控件 / 编辑器 6 处交互）+ 审查修复 30 项（导入两段式、journal layout、缺文件抢救、冲突自愈、写锁/快照/备份）+ 数据层真机验证（清空 → 从空库恢复）。
+- 真机：release **3.57 MB** 已装 Redmi Note 11 5G（Android 13），冷启动 **411–437 ms**，数据保留；剩余仅有「长按退格手感」需手指确认。
 - 构建：AGP 8.5.2 / Gradle 8.9 / Kotlin 2.0.21 / compileSdk 34 / minSdk 29；release 已开 R8。
-- APK：release **3.5 MB** / debug 28.9 MB；已多次覆盖安装到 Redmi Note 11 5G（Android 13），数据保留。
-- 单测：**67 条全通过**（`gradlew testDebugUnitTest`）。
-- 性能（真机 60Hz / 30 章 29.2 万字）：冷启动 359–368 ms、PSS 53.7 MB、滚动 0% jank、输入 p95 12 ms。
+- APK：release **3.57 MB** / debug 27.6 MB；多次覆盖安装数据保留。
+- 单测：**96 条全通过**（`gradlew testReleaseUnitTest`）。
+- 性能：0.11.0 冷启动 411–437 ms；0.10.0 的 30 章基线（359–368 ms / PSS 53.7 MB / 滚动 0% jank / 输入 p95 12 ms）保留对照。
 - 验收：22 条 AC 18 通过 / 4 部分 / 0 未验（见 项目\验收\AC状态_20261124.md）。
 
 ## 构建

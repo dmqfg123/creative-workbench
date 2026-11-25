@@ -96,7 +96,8 @@ fun DataSettingsScreen(onBack: () -> Unit) {
         if (uri != null) {
             scope.launch {
                 val result = backup.export(uri, gzip = true, includeApiKey = includeKey)
-                val message = if (result.isSuccess) "已导出备份" else "导出失败：" + result.exceptionOrNull()?.message
+                val message = if (result.isSuccess) "已导出；本机也留了一份（可「恢复」）"
+                else "导出失败：" + result.exceptionOrNull()?.message
                 Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                 if (pendingClear && !result.isSuccess) {
                     // 导出没成功就绝不能留着 pendingClear：

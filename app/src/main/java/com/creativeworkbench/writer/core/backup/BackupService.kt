@@ -97,6 +97,10 @@ class BackupService(
         runCatching {
             val bundle = buildBundle(includeApiKey)
             val text = json.encodeToString(BackupBundle.serializer(), bundle)
+            // 顺手在 App 私有目录留一份：OEM 的文件选择器经常找不到刚导出的文件
+            // （HyperOS 实测：Downloads 提供方不显示未进 MediaStore 文档索引的 .json.gz），
+            // 用户要恢复时至少还能走「本机备份 → 恢复」。
+            runCatching { writeLocalBackupText(text) }
             val stream = context.contentResolver.openOutputStream(uri)
                 ?: error("无法写入文件")
             stream.use { out ->
