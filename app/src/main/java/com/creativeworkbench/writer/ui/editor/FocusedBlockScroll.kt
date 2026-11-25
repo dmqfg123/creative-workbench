@@ -31,15 +31,16 @@ fun focusedBlockScrollTarget(
         val start = focused.offset
         val end = focused.offset + focused.size
         val available = (effectiveEnd - viewportStartOffset).coerceAtLeast(1)
-        if (focused.size > available) {
-            // 段落本身比可视区还高：硬塞进去会把段首顶出屏幕，不如把段首对齐到视口顶部，
-            // 让「正在写的那一段」从上往下长，光标跟得上。
-            return if (start == viewportStartOffset) null else FocusScrollTarget.By(start - viewportStartOffset)
-        }
+        val hiddenBelow = (end - effectiveEnd).coerceAtLeast(0)
+        // 规则：没被挡住就不动；被挡掉一大截（或整段比视口还高）就把段首对齐到视口顶部，
+        // 保证「正在写的这一段从第一行起就看得见」。只挡一点点才做最小滚动。
+        // 之前一律「把段尾推到键盘上沿」，遇到长段落会把段首顶出屏幕——空有对齐，看不见自己在写哪。
         return when {
             start < viewportStartOffset -> FocusScrollTarget.By(start - viewportStartOffset)
-            end > effectiveEnd -> FocusScrollTarget.By(end - effectiveEnd)
-            else -> null
+            hiddenBelow == 0 -> null
+            focused.size > available -> FocusScrollTarget.By(start - viewportStartOffset)
+            hiddenBelow > available / 6 -> FocusScrollTarget.By(start - viewportStartOffset)
+            else -> FocusScrollTarget.By(hiddenBelow)
         }
     }
     val firstVisible = visibleItems.minOfOrNull { it.index }

@@ -9,6 +9,8 @@ object AiOutputSanitizer {
     private val fenceEnd = Regex("\\s*```\\s*\\z")
     private val bracketLabel = Regex("^\\s*[【\\[]([^】\\]]{1,16})[】\\]]\\s*")
     private val colonLabel = Regex("^\\s*(续写|改写|润色|检查结果|结果|正文)\\s*[:：]\\s*")
+    /** 模型会照抄上下文里的段落标记（[[b11]] / [b11]），写进正文就是脏数据。 */
+    private val paragraphMarker = Regex("^\\s*\\[\\[?\\s*b\\d+\\s*\\]\\]?\\s*")
     private val labelHints = listOf("续写", "改写", "润色", "检查", "结果", "模拟", "正文", "AI")
 
     fun clean(raw: String): String {
@@ -27,6 +29,11 @@ object AiOutputSanitizer {
             val colon = colonLabel.find(text)
             if (colon != null) {
                 text = text.removeRange(colon.range).trim()
+                changed = true
+            }
+            val marker = paragraphMarker.find(text)
+            if (marker != null) {
+                text = text.removeRange(marker.range).trim()
                 changed = true
             }
             guard++

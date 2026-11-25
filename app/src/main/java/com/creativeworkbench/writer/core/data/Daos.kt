@@ -125,4 +125,10 @@ interface SnapshotDao {
 
     @Query("DELETE FROM snapshots WHERE id = :id")
     suspend fun delete(id: String)
+
+    @Query("DELETE FROM snapshots WHERE chapterId = :chapterId")
+    suspend fun deleteByChapter(chapterId: String)
+
+    @Query("DELETE FROM snapshots")
+    suspend fun deleteAll()
 }

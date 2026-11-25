@@ -35,6 +35,33 @@ class FocusedBlockScrollTest {
     }
 
     @Test
+    fun mostlyHiddenBlockAlignsItsTop() {
+        // 视口 410，块 100..500（被挡 102，超过 available/6），应把段首顶到视口顶部
+        val target = focusedBlockScrollTarget(
+            focusedIndex = 1,
+            visibleItems = items(Triple(0, 0, 100), Triple(1, 100, 400)),
+            viewportStartOffset = 0,
+            viewportEndOffset = 410,
+            bottomMarginPx = 12
+        )
+        assertTrue(target is FocusScrollTarget.By)
+        assertEquals(100, (target as FocusScrollTarget.By).deltaPx)
+    }
+
+    @Test
+    fun tallerThanViewportAlignsTop() {
+        val target = focusedBlockScrollTarget(
+            focusedIndex = 1,
+            visibleItems = items(Triple(0, 0, 100), Triple(1, 100, 1200)),
+            viewportStartOffset = 0,
+            viewportEndOffset = 410,
+            bottomMarginPx = 12
+        )
+        assertTrue(target is FocusScrollTarget.By)
+        assertEquals(100, (target as FocusScrollTarget.By).deltaPx)
+    }
+
+    @Test
     fun notComposedBelowUsesToItemWithEstimatedOffset() {
         val target = focusedBlockScrollTarget(
             focusedIndex = 5,

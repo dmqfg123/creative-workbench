@@ -252,7 +252,26 @@ class BackupService(
                 )
             }
 
-            // 2) 数据库整包替换在一个事务里：任一条失败自动回滚，原数据还在
+            // 2) 预检：每一章都得有能解析的 .import。缺一章就整体中止，数据库一个字节都不动。
+            val unreadable = bundle.chapters.filterNot { chapterFiles.hasReadableImport(it.id) }
+            if (unreadable.isNotEmpty()) {
+                chapterFiles.discardImports(bundle.chapters.map { it.id })
+                return@withContext ImportResult.Error(
+                    "备份里有 " + unreadable.size + " 章正文不完整（" + unreadable.take(3).joinToString("、") { it.title } +
+                        "），已中止导入，原数据没有被改动"
+                )
+            }
+
+            // 3) 先把暂存文件换名成正式文件，再提交数据库。
+            //    反过来的话，换名失败会留下「DB 有这一章、正文还在 .import」——下次打开会被当成空章。
+            runCatching { bundle.chapters.forEach { chapterFiles.commitImport(it.id) } }
+                .getOrElse { error ->
+                    return@withContext ImportResult.Error(
+                        "章节文件换名失败：" + (error.message ?: "磁盘错误") + "；数据库未改动"
+                    )
+                }
+
+            // 4) 数据库整包替换在一个事务里：任一条失败自动回滚
             db.withTransaction {
                 db.noteDao().deleteAll()
                 db.chapterDao().deleteAll()
@@ -306,11 +325,9 @@ class BackupService(
                 }
             }
 
-            // 3) 事务成功后才把暂存文件换名成正式章节文件，再清掉旧章节
-            bundle.chapters.forEach { chapterFiles.commitImport(it.id) }
             chapterFiles.deleteOtherThan(bundle.chapters.map { it.id }.toSet())
 
-            // 4) 设置与密钥（密钥只有导出时勾选过才在包里）
+            // 5) 设置与密钥（密钥只有导出时勾选过才在包里）
             bundle.settings["theme"]?.let { name ->
                 runCatching { settings.setTheme(ThemeMode.valueOf(name)) }
             }
@@ -318,6 +335,9 @@ class BackupService(
                 runCatching { settings.setFontSize(FontSizePreset.valueOf(name)) }
             }
             bundle.settings["notes_enabled"]?.let { settings.setNotesEnabled(it.toBoolean()) }
+            // 导出里有这两个键，恢复时也得写回去，否则换机后静默回默认值
+            bundle.settings["allow_cleartext_http"]?.let { settings.setAllowCleartextHttp(it.toBoolean()) }
+            bundle.settings["fps_overlay"]?.let { settings.setFpsOverlay(it.toBoolean()) }
             bundle.apiKey?.takeIf { it.isNotBlank() }?.let { aiConfig.saveApiKey(it) }
 
             ImportResult.Ok(
@@ -514,6 +534,7 @@ class BackupService(
                 db.workDao().delete(work.id)
             }
             chapterFiles.deleteOtherThan(emptySet())
+            db.snapshotDao().deleteAll()
             db.noteDao().deleteAll()
             historyStore.clear()
         }

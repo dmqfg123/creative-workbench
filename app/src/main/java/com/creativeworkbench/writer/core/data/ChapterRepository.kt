@@ -1,6 +1,7 @@
 package com.creativeworkbench.writer.core.data
 
 import androidx.room.withTransaction
+import com.creativeworkbench.writer.core.common.Breadcrumbs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -32,6 +33,8 @@ class ChapterRepository(
 ) {
     private val writeMutex = Mutex()
     private val journalSeq = AtomicLong(System.currentTimeMillis())
+    /** 每个章节上一次写进 journal 的段落顺序，用来决定要不要补一条 layout 记录。 */
+    private val lastWrittenOrder = HashMap<String, List<String>>()
 
     fun observeWorks(): Flow<List<WorkEntity>> = db.workDao().observeAll()
 
@@ -129,13 +132,23 @@ class ChapterRepository(
                 return@withLock OpenChapterResult.Corrupt(error.message ?: "章节文件无法解析")
             }
             if (content == null) {
-                content = ChapterContent(
-                    chapterId = chapterId,
-                    revision = chapter.revision,
-                    blocks = listOf(Block(UUID.randomUUID().toString(), "")),
-                    updatedAt = System.currentTimeMillis()
-                )
-                files.write(content)
+                // 正式文件不见了：先看 .import 暂存与 .bak 上一版。
+                // 都对不上就报 Corrupt，绝不在这里写一个空章——那会把「丢文件」固化成「这章就是空的」。
+                when (val salvage = files.salvage(chapterId)) {
+                    is ChapterFileStore.Salvage.Found -> {
+                        content = salvage.content
+                        files.write(content)
+                        Breadcrumbs.record("章节文件缺失，已从" + salvage.source + "恢复")
+                    }
+                    is ChapterFileStore.Salvage.Unreadable -> {
+                        return@withLock OpenChapterResult.Corrupt(
+                            "章节文件不见了，" + salvage.source + "也读不出来（" + salvage.detail + "）；请从备份恢复"
+                        )
+                    }
+                    null -> return@withLock OpenChapterResult.Corrupt(
+                        "章节文件不见了（可能是上次导入/清空没写完），请从备份恢复这一章"
+                    )
+                }
             }
             // 文件先写、DB 后写；如果中间崩溃，文件 revision 会领先。
             // 以文件为准修复 DB 与作品总字数，避免覆盖已落盘的正文。
@@ -185,6 +198,7 @@ class ChapterRepository(
                     )
                 }
                 files.clearJournal(chapterId)
+                lastWrittenOrder.remove(chapterId)
             }
             OpenChapterResult.Ok(OpenedChapter(chapter, content))
         }
@@ -223,9 +237,14 @@ class ChapterRepository(
                 )
             }
             files.clearJournal(chapterId)
+            lastWrittenOrder.remove(chapterId)
             SaveResult.Saved(newRevision, wordCount)
         }
     }
+
+    /** 冲突自愈用：磁盘上这一章现在的 revision。 */
+    suspend fun currentRevision(chapterId: String): Long? =
+        withContext(Dispatchers.IO) { db.chapterDao().byId(chapterId)?.revision }
 
     suspend fun appendJournal(chapterId: String, blockId: String, text: String) {
         appendJournalBlocks(chapterId, listOf(Block(blockId, text)))
@@ -234,13 +253,30 @@ class ChapterRepository(
     suspend fun appendJournalBlocks(chapterId: String, blocks: List<Block>) {
         if (blocks.isEmpty()) return
         val now = System.currentTimeMillis()
-        val records = blocks.map { block ->
-            JournalRecord(
-                seq = journalSeq.incrementAndGet(),
-                blockId = block.id,
-                text = block.text,
-                crc32 = files.crc32(block.text),
-                ts = now
+        val order = blocks.map { it.id }
+        val records = ArrayList<JournalRecord>(blocks.size + 1)
+        // 顺序/删除只能靠 layout 行表达：只写每段文本，回放时把删掉的段复活、新段甩到章末。
+        if (lastWrittenOrder[chapterId] != order) {
+            records.add(
+                JournalRecord(
+                    seq = journalSeq.incrementAndGet(),
+                    kind = JournalRecord.KIND_LAYOUT,
+                    order = order,
+                    ts = now
+                )
+            )
+            lastWrittenOrder[chapterId] = order
+        }
+        blocks.forEach { block ->
+            records.add(
+                JournalRecord(
+                    seq = journalSeq.incrementAndGet(),
+                    kind = JournalRecord.KIND_BLOCK,
+                    blockId = block.id,
+                    text = block.text,
+                    crc32 = files.crc32(block.text),
+                    ts = now
+                )
             )
         }
         files.appendJournalBatch(chapterId, records)
@@ -293,12 +329,18 @@ class ChapterRepository(
             }
             files.delete(chapterId)
             files.deleteSnapshots(chapterId)
+            // 快照行也要删：只删文件会留下孤儿行，count() 虚高会让 200 上限提前淘汰有效快照
+            db.snapshotDao().deleteByChapter(chapterId)
+            lastWrittenOrder.remove(chapterId)
         }
     }
 
     suspend fun renameChapter(chapterId: String, title: String) = withContext(Dispatchers.IO) {
-        val chapter = db.chapterDao().byId(chapterId) ?: return@withContext
-        db.chapterDao().update(chapter.copy(title = title.trim(), updatedAt = System.currentTimeMillis()))
+        // 持锁读改写：不持锁的话可能把另一路刚刚保存的 revision / wordCount 写回旧值
+        writeMutex.withLock {
+            val chapter = db.chapterDao().byId(chapterId) ?: return@withLock
+            db.chapterDao().update(chapter.copy(title = title.trim(), updatedAt = System.currentTimeMillis()))
+        }
     }
 
     /** 写入前存快照：全局最多 200 个，按时间淘汰最早的。 */
@@ -357,13 +399,15 @@ class ChapterRepository(
     }
 
     suspend fun updateSummary(chapterId: String, summary: String?) = withContext(Dispatchers.IO) {
-        val chapter = db.chapterDao().byId(chapterId) ?: return@withContext
-        db.chapterDao().update(
-            chapter.copy(
-                summary = summary?.trim()?.takeIf { it.isNotEmpty() },
-                updatedAt = System.currentTimeMillis()
+        writeMutex.withLock {
+            val chapter = db.chapterDao().byId(chapterId) ?: return@withLock
+            db.chapterDao().update(
+                chapter.copy(
+                    summary = summary?.trim()?.takeIf { it.isNotEmpty() },
+                    updatedAt = System.currentTimeMillis()
+                )
             )
-        )
+        }
     }
 
     suspend fun deleteWork(workId: String) = withContext(Dispatchers.IO) {
@@ -373,6 +417,7 @@ class ChapterRepository(
             chapters.forEach { chapter ->
                 files.delete(chapter.id)
                 files.deleteSnapshots(chapter.id)
+                db.snapshotDao().deleteByChapter(chapter.id)
             }
             // 人物/设定必须挂在作品上，作品没了就一起删，避免孤儿笔记。
             db.noteDao().deleteByWork(workId)
@@ -435,23 +480,6 @@ class ChapterRepository(
         return total
     }
 
-    private fun applyJournal(base: List<Block>, records: List<JournalRecord>): List<Block> {
-        val ordered = ArrayList(base)
-        val index = ordered.associateBy { it.id }.toMutableMap()
-        records.sortedBy { it.seq }.forEach { record ->
-            val existing = index[record.blockId]
-            if (existing == null) {
-                val block = Block(record.blockId, record.text)
-                ordered.add(block)
-                index[record.blockId] = block
-            } else {
-                val position = ordered.indexOfFirst { it.id == record.blockId }
-                val updated = existing.copy(text = record.text)
-                ordered[position] = updated
-                index[record.blockId] = updated
-            }
-        }
-        if (ordered.isEmpty()) ordered.add(Block(UUID.randomUUID().toString(), ""))
-        return ordered
-    }
+    private fun applyJournal(base: List<Block>, records: List<JournalRecord>): List<Block> =
+        JournalReplay.apply(base, records)
 }

@@ -19,7 +19,8 @@ object PublicBackupStore {
         val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
         val relativePath = Environment.DIRECTORY_DOWNLOADS + "/" + FOLDER + "/"
 
-        // 同一天的旧文件先删掉，避免出现 (1)(2)
+        // 先记下同名的旧文件，等新的写成功再删：先删后写的话，第二步失败当天那份就没了。
+        var previousId = -1L
         runCatching {
             resolver.query(
                 collection,
@@ -28,14 +29,7 @@ object PublicBackupStore {
                 arrayOf(name, relativePath),
                 null
             )?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val id = cursor.getLong(0)
-                    resolver.delete(
-                        android.content.ContentUris.withAppendedId(collection, id),
-                        null,
-                        null
-                    )
-                }
+                if (cursor.moveToFirst()) previousId = cursor.getLong(0)
             }
         }
 
@@ -46,10 +40,22 @@ object PublicBackupStore {
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val uri = resolver.insert(collection, values) ?: error("无法创建备份文件")
-        resolver.openOutputStream(uri)?.use { out -> out.write(bytes) } ?: error("无法写入备份文件")
+        runCatching {
+            resolver.openOutputStream(uri)?.use { out -> out.write(bytes) } ?: error("无法写入备份文件")
+        }.onFailure { error ->
+            // 写失败就把这条半成品删掉，别留一个 0 字节的「今日备份」
+            runCatching { resolver.delete(uri, null, null) }
+            throw error
+        }
         values.clear()
         values.put(MediaStore.MediaColumns.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
+        // 新的已经落盘，再清掉同名的旧行，避免 Download 里出现 (1)(2)
+        if (previousId > 0) {
+            runCatching {
+                resolver.delete(android.content.ContentUris.withAppendedId(collection, previousId), null, null)
+            }
+        }
         uri
     }
 }

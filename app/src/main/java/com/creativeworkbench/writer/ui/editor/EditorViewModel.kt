@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.creativeworkbench.writer.WorkbenchApp
+import com.creativeworkbench.writer.core.common.Breadcrumbs
 import com.creativeworkbench.writer.core.data.Block
 import com.creativeworkbench.writer.core.data.ChapterEntity
 import com.creativeworkbench.writer.core.data.OpenChapterResult
@@ -539,7 +540,7 @@ class EditorViewModel(
         saveMutex.withLock { saveNowLocked() }
     }
 
-    private suspend fun saveNowLocked() {
+    private suspend fun saveNowLocked(attempt: Int = 0) {
         val snapshot = _state.value
         if (!snapshot.dirty) return
         val version = editVersion
@@ -577,7 +578,18 @@ class EditorViewModel(
                 }
             }
             is SaveResult.Conflict -> {
-                _state.update { it.copy(saving = false, error = "内容已变化，保存被拒绝") }
+                // 磁盘上的 revision 比内存新（另一处写过、或上次导入换过文件）。
+                // 单用户写作场景下内存内容就是作者正在写的东西，取磁盘 revision 补存一次；
+                // 不这么做，这一章在本次会话里的自动保存会永久失效，只剩 journal 兜底。
+                val diskRevision = runCatching { repository.currentRevision(chapterId) }.getOrNull()
+                if (attempt == 0 && diskRevision != null && diskRevision != snapshot.revision) {
+                    _state.update {
+                        it.copy(revision = diskRevision, saving = false, error = null)
+                    }
+                    Breadcrumbs.record("保存冲突：已用磁盘 revision " + diskRevision + " 重存一次")
+                    return saveNowLocked(attempt = 1)
+                }
+                _state.update { it.copy(saving = false, error = "内容已变化，保存被拒绝（重开这一章可恢复）") }
             }
             SaveResult.NotFound -> {
                 _state.update { it.copy(saving = false, error = "章节不存在") }

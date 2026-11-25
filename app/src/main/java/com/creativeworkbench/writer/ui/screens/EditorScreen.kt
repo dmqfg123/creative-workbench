@@ -197,8 +197,7 @@ fun EditorScreen(
     var notesOpen by remember { mutableStateOf(false) }
     var chapterSheetOpen by remember { mutableStateOf(false) }
     var activeBlockMaxHeight by remember { mutableStateOf(320.dp) }
-    // 只有「手指点了某一段」才主动弹输入法；删段、撤销这类被动激活不该抢键盘
-    var imeRequestBlockId by remember { mutableStateOf<String?>(null) }
+
     val imeBottomPx = WindowInsets.ime.getBottom(density)
     var noteExpanded by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
@@ -254,32 +253,24 @@ fun EditorScreen(
             }
     }
 
-    // 键盘一弹就把视口挤小；这一步负责把正在写的段拉到键盘上沿之上。
-    // 只监听 activeBlockId 是不够的——那时机在键盘弹出之前，算出来「已可见」就不动了。
-    LaunchedEffect(state.activeBlockId, imeBottomPx, activeBlockMaxHeight) {
+    // 键盘弹出会把视口挤小（adjustResize），这一段的活是：让正在写的那一段始终落在键盘上方。
+    // 不依赖 WindowInsets.ime —— HyperOS 上它可能一直报 0，但窗口确实变矮了；
+    // 所以直接盯「列表视口」的变化：视口一变就对齐，两遍兜住动画与重排。
+    LaunchedEffect(state.activeBlockId) {
         val activeId = state.activeBlockId ?: return@LaunchedEffect
-        val index = state.blocks.indexOfFirst { block -> block.id == activeId }
-        if (index < 0) return@LaunchedEffect
-        delay(if (imeBottomPx > 0) 160 else 60)
-        withFrameNanos { }
-        val info = listState.layoutInfo
-        if (info.visibleItemsInfo.isEmpty()) return@LaunchedEffect
-        val target = focusedBlockScrollTarget(
-            // LazyColumn 第 0 项是章节头，正文段从 item 下标 +1 算——
-            // 老代码直接拿 block 下标去比，永远对不上正确的 item，这就是「不自动对齐」的一半原因。
-            focusedIndex = index + 1,
-            visibleItems = info.visibleItemsInfo.map { item ->
-                VisibleBlockBounds(item.index, item.offset, item.size)
-            },
-            viewportStartOffset = info.viewportStartOffset,
-            viewportEndOffset = info.viewportEndOffset,
-            bottomMarginPx = bottomMarginPx
-        )
-        when (target) {
-            is FocusScrollTarget.By -> listState.animateScrollBy(target.deltaPx.toFloat())
-            is FocusScrollTarget.ToItem -> listState.animateScrollToItem(target.index, target.scrollOffset)
-            null -> Unit
+        val lazyIndex = state.blocks.indexOfFirst { block -> block.id == activeId } + 1
+        if (lazyIndex <= 0) return@LaunchedEffect
+        snapshotFlow {
+            val info = listState.layoutInfo
+            Triple(info.viewportStartOffset, info.viewportEndOffset, info.visibleItemsInfo.size)
         }
+            .distinctUntilChanged()
+            .collectLatest {
+                repeat(2) { pass ->
+                    delay(if (pass == 0) 120L else 180L)
+                    alignFocusedBlock(listState, lazyIndex, bottomMarginPx)
+                }
+            }
     }
 
     BackHandler {
@@ -446,8 +437,6 @@ fun EditorScreen(
                         },
                         onStartWriting = {
                             state.blocks.firstOrNull()?.let { block ->
-                                // 和点段落一样：激活即弹键盘，别让「开始写」还要再点一次
-                                imeRequestBlockId = block.id
                                 viewModel.activate(block.id, 0)
                             }
                         },
@@ -479,7 +468,6 @@ fun EditorScreen(
                                 textSizeSp = bodySize,
                                 lineHeightSp = lineHeight,
                                 maxHeight = activeBlockMaxHeight,
-                                requestIme = imeRequestBlockId == block.id,
                                 modifier = Modifier.fillMaxWidth()
                             )
                             // 段落操作条：固定跟在这一段下面，不再把按钮压在文字上
@@ -507,10 +495,7 @@ fun EditorScreen(
                             block = block,
                             textSizeSp = bodySize,
                             lineHeightSp = lineHeight,
-                            onActivate = { offset ->
-                                imeRequestBlockId = block.id
-                                viewModel.activate(block.id, offset)
-                            }
+                            onActivate = { offset -> viewModel.activate(block.id, offset) }
                         )
                     }
                 }
@@ -733,6 +718,39 @@ fun EditorScreen(
                 }
             }
         )
+    }
+}
+
+/**
+ * 把正在编辑的那一段对齐到可视区。
+ * 大跳用 scrollToItem 直接定位段首（delta 累加 + 动画会越滚越远），小位移才做动画。
+ */
+private suspend fun alignFocusedBlock(
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    lazyIndex: Int,
+    bottomMarginPx: Int
+) {
+    val info = listState.layoutInfo
+    if (info.visibleItemsInfo.isEmpty()) return
+    val available = (info.viewportEndOffset - info.viewportStartOffset).coerceAtLeast(1)
+    val target = focusedBlockScrollTarget(
+        focusedIndex = lazyIndex,
+        visibleItems = info.visibleItemsInfo.map { item ->
+            VisibleBlockBounds(item.index, item.offset, item.size)
+        },
+        viewportStartOffset = info.viewportStartOffset,
+        viewportEndOffset = info.viewportEndOffset,
+        bottomMarginPx = bottomMarginPx
+    )
+    when (target) {
+        is FocusScrollTarget.By ->
+            if (kotlin.math.abs(target.deltaPx) > available / 3) {
+                listState.scrollToItem(lazyIndex, 0)
+            } else {
+                listState.animateScrollBy(target.deltaPx.toFloat())
+            }
+        is FocusScrollTarget.ToItem -> listState.scrollToItem(target.index, target.scrollOffset)
+        null -> Unit
     }
 }
 
@@ -1188,8 +1206,6 @@ private fun ActiveBlockEditor(
     textSizeSp: Float,
     lineHeightSp: Float,
     maxHeight: Dp,
-    /** 是否主动弹输入法：只有用户点了这一段才为 true。 */
-    requestIme: Boolean,
     modifier: Modifier
 ) {
     val context = LocalContext.current
@@ -1306,7 +1322,9 @@ private fun ActiveBlockEditor(
         delay(40)
         editText.requestFocus()
         editText.setSelection(cursorOffset.coerceIn(0, editText.text.length))
-        if (requestIme) editText.postDelayed({ showSoftKeyboard(editText) }, 60)
+        // 无条件请求输入法：回车分段会重建 EditText（新段 id 变了），
+        // 只 requestFocus 的话输入法可能已经掉了——真机上表现为「回车后打字没反应」。
+        editText.postDelayed({ showSoftKeyboard(editText) }, 60)
     }
     LaunchedEffect(cursorOffset) {
         if (editText.selectionStart != cursorOffset) {

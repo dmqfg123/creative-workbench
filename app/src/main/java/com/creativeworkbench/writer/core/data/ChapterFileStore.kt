@@ -19,14 +19,27 @@ data class ChapterContent(
     val updatedAt: Long
 )
 
+/**
+ * journal 记录（NDJSON，一行一条）：
+ * - kind="layout"：这一批的段落顺序（order 是 id 列表）。删除/插入/换位只有它能表达。
+ * - kind="block"：单段文本。
+ * 旧版本只写 block 记录，缺 kind/order 时按 block 解析，仍能读。
+ */
 @Serializable
 data class JournalRecord(
     val seq: Long,
-    val blockId: String,
-    val text: String,
-    val crc32: Long,
-    val ts: Long
-)
+    val kind: String = KIND_BLOCK,
+    val order: List<String> = emptyList(),
+    val blockId: String = "",
+    val text: String = "",
+    val crc32: Long = 0L,
+    val ts: Long = 0L
+) {
+    companion object {
+        const val KIND_BLOCK = "block"
+        const val KIND_LAYOUT = "layout"
+    }
+}
 
 class ChapterFileStore(context: Context) {
     private val root = File(context.filesDir, "workbench")
@@ -69,6 +82,32 @@ class ChapterFileStore(context: Context) {
         return json.decodeFromString<ChapterContent>(file.readText(Charsets.UTF_8))
     }
 
+    sealed interface Salvage {
+        data class Found(val content: ChapterContent, val source: String) : Salvage
+        data class Unreadable(val source: String, val detail: String) : Salvage
+    }
+
+    /**
+     * 正式文件不在时，按「导入暂存 → 上一版备份」的顺序找回来。
+     * 以前这里直接造一个空章节并落盘，等于把一次可救的丢文件固化成「这一章就是空的」。
+     */
+    fun salvage(chapterId: String): Salvage? {
+        val candidates = listOf(
+            File(chaptersDir, chapterId + ".json.import") to ".import 暂存",
+            File(chaptersDir, chapterId + ".json.bak") to ".bak 上一版"
+        )
+        var lastError: Salvage.Unreadable? = null
+        candidates.forEach { (file, label) ->
+            if (!file.exists()) return@forEach
+            runCatching { json.decodeFromString<ChapterContent>(file.readText(Charsets.UTF_8)) }
+                .onSuccess { content -> return Salvage.Found(content, label) }
+                .onFailure { error ->
+                    lastError = Salvage.Unreadable(label, error.message ?: "解析失败")
+                }
+        }
+        return lastError
+    }
+
     fun write(content: ChapterContent) {
         val target = contentFile(content.chapterId)
         val tmp = File(chaptersDir, content.chapterId + ".json.tmp")
@@ -97,6 +136,20 @@ class ChapterFileStore(context: Context) {
             out.flush()
             out.fd.sync()
         }
+    }
+
+    /** 预检：这份暂存文件存在且能解析。导入前必须全过，否则不能动数据库。 */
+    fun hasReadableImport(chapterId: String): Boolean {
+        val file = File(chaptersDir, chapterId + ".json.import")
+        if (!file.exists()) return false
+        return runCatching {
+            json.decodeFromString<ChapterContent>(file.readText(Charsets.UTF_8))
+        }.isSuccess
+    }
+
+    /** 导入失败时清掉本次留下的暂存文件。 */
+    fun discardImports(chapterIds: Collection<String>) {
+        chapterIds.forEach { runCatching { File(chaptersDir, it + ".json.import").delete() } }
     }
 
     /** 把 .import 原子换成正式章节文件；没有暂存文件时忽略。 */
