@@ -124,10 +124,12 @@ fun LibraryScreen(
     // 删除 5 秒内可撤销：任务交给 ViewModel，切页面不会把删除弄丢。
     LaunchedEffect(pendingDeleteId) {
         val id = pendingDeleteId ?: return@LaunchedEffect
+        // 撤销窗口只有 5 秒，提示条别挂 10 秒：超过 5 秒再点「撤销」是空操作。
+        // 用 Short（约 4 秒）保证看得见的时候都还能撤销。
         val result = snackbar.showSnackbar(
-            message = "已删除，5 秒内可撤销",
+            message = "已删除，可撤销",
             actionLabel = "撤销",
-            duration = androidx.compose.material3.SnackbarDuration.Long
+            duration = androidx.compose.material3.SnackbarDuration.Short
         )
         if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
             onCancelDelete(id)

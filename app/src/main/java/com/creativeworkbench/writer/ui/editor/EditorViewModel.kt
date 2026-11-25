@@ -16,6 +16,7 @@ import com.creativeworkbench.writer.core.editor.EditEngine
 import com.creativeworkbench.writer.core.editor.UndoEntry
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -381,6 +382,7 @@ class EditorViewModel(
     /** 编辑器内换章前先落盘：备注与正文都存住再跳。 */
     fun flushThen(action: () -> Unit) {
         viewModelScope.launch {
+            runCatching { repository.appendJournalBlocks(chapterId, _state.value.blocks) }
             withTimeoutOrNull(900) {
                 runCatching {
                     persistNoteNow()
@@ -468,6 +470,8 @@ class EditorViewModel(
      */
     fun flushAndBack(onDone: () -> Unit) {
         viewModelScope.launch {
+            // 先把正文塞进 journal：即使 saveChapter 被超时打断，重开也能从 journal 回放。
+            runCatching { repository.appendJournalBlocks(chapterId, _state.value.blocks) }
             withTimeoutOrNull(900) {
                 runCatching {
                     persistNoteNow()
@@ -527,9 +531,17 @@ class EditorViewModel(
         }
     }
 
+    private val saveMutex = kotlinx.coroutines.sync.Mutex()
+
     private suspend fun saveNow() {
+        // 用锁排队，而不是「正在存就直接返回」：
+        // 退出时的 flush 不能因为恰好有个 1.5 秒自动保存在跑，就被静默跳过。
+        saveMutex.withLock { saveNowLocked() }
+    }
+
+    private suspend fun saveNowLocked() {
         val snapshot = _state.value
-        if (!snapshot.dirty || snapshot.saving) return
+        if (!snapshot.dirty) return
         val version = editVersion
         _state.update { it.copy(saving = true) }
         val saved = runCatching {

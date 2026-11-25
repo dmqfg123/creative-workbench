@@ -95,13 +95,13 @@ fun AiPanel(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 state.availableActions.forEach { item ->
+                    // 改写：没选中文字、也没点进任何段落时，这个动作做不了——置灰，别让人点了没反应。
+                    val usable = item.id != AiActions.REWRITE || selection != null || hasActiveBlock
                     Tag(
                         item.name,
                         active = action?.id == item.id,
-                        onClick = {
-                            // 改写没选中时落到「当前段」，由编辑器侧补选区。
-                            if (item.id != AiActions.REWRITE || selection != null || hasActiveBlock) onAction(item.id)
-                        }
+                        enabled = usable,
+                        onClick = { onAction(item.id) }
                     )
                 }
             }

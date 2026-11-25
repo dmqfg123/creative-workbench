@@ -136,7 +136,7 @@ fun MoreScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "正文 17 / 行高 31；只作用于正文，行距跟着字号变。",
+                    "小 15/27 · 标准 17/31 · 大 19/35；只作用于正文，行距跟着字号变。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -163,12 +163,8 @@ fun MoreScreen(
             }
 
             Spacer(Modifier.height(16.dp))
-            SwitchRow(
-                title = "允许明文 HTTP",
-                desc = "默认只允许 https；本机 Ollama / LM Studio 才需要打开",
-                checked = settings.allowCleartextHttp,
-                onChange = viewModel::setAllowCleartextHttp
-            )
+            // 「允许明文 HTTP」只在「更多 → AI 助手」里有一份（写进 AI 配置）。
+            // 这里原本还有一份写 settings 的开关，两边 prefs 不互通，点了对 AI 毫无作用。
             SwitchRow(
                 title = "显示帧率",
                 desc = "只在编辑器生效，默认关闭",

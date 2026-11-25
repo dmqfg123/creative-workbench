@@ -27,11 +27,12 @@ data class AiUsage(
         get() = if (promptTokens <= 0) 0.0 else cacheHitTokens.toDouble() / promptTokens
 
     /**
-     * 按 DeepSeek 公开价目估算本次花费（元）：
-     * 缓存命中 0.1 / 未命中 1 / 输出 2 元每百万 tokens。价格会变，只作参考。
+     * 按 DeepSeek 官方价目（deepseek-flash，高峰价，2026-11 口径）估算本次花费（元）：
+     * 输入命中 $0.006/M、未命中 $0.30/M、输出 $1.20/M，按 1 美元 ≈ 7.1 元折算；
+     * 低谷价是高峰的一半，deepseek-v4-pro 约为 3–4 倍。价格会变，只当量级参考。
      */
     fun estimatedCostCny(): Double =
-        (cacheMissTokens * 1.0 + cacheHitTokens * 0.1 + completionTokens * 2.0) / 1_000_000.0
+        (cacheMissTokens * 2.13 + cacheHitTokens * 0.043 + completionTokens * 8.52) / 1_000_000.0
 }
 
 sealed interface AiCallResult {
@@ -84,8 +85,13 @@ class AiClient {
             .post(payload.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
+        // 取消协程时要真的把 HTTP 调用掐掉：execute() 是阻塞的，光 cancel 协程调用还在跑、还计费。
+        val call = client.newCall(request)
+        val cancelHandle = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
+            ?.invokeOnCompletion { call.cancel() }
+        try {
         runCatching {
-            client.newCall(request).execute().use { response ->
+            call.execute().use { response ->
                 val body = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
                     return@withContext AiCallResult.Error(
@@ -107,6 +113,9 @@ class AiClient {
             }
         }.getOrElse { error ->
             AiCallResult.Error("网络错误：" + (error.message ?: error.javaClass.simpleName))
+        }
+        } finally {
+            cancelHandle?.dispose()
         }
     }
 

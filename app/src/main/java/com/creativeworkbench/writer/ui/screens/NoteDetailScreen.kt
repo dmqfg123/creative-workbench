@@ -73,7 +73,11 @@ fun NoteDetailScreen(
 ) {
     val context = LocalContext.current
     val application = context.applicationContext as Application
-    val actualId = remember(noteId) { if (noteId == "new") newNoteId() else noteId }
+    // rememberSaveable：进程被杀后回到 note/new 时不能换一个新 UUID，
+    // 否则刚写进去的笔记成孤儿，页面上是空白新笔记。
+    val actualId = androidx.compose.runtime.saveable.rememberSaveable(noteId) {
+        if (noteId == "new") newNoteId() else noteId
+    }
     val viewModel: NoteDetailViewModel = viewModel(
         key = "note-" + actualId,
         factory = NoteDetailViewModelFactory(application, actualId, workId, kind)
@@ -90,6 +94,16 @@ fun NoteDetailScreen(
 
     DisposableEffect(Unit) {
         onDispose { viewModel.flush() }
+    }
+
+    // 退后台也存一次：只有 700ms 防抖的话，切走再被系统杀掉会丢最后一段输入
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) viewModel.flush()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     if (showCopyTo) {
@@ -223,7 +237,8 @@ fun NoteDetailScreen(
             Spacer(Modifier.height(8.dp))
             BasicTextField(
                 value = note.title,
-                onValueChange = { viewModel.edit { n -> n.copy(title = it) } },
+                onValueChange = { viewModel.edit { n -> n.copy(title = it.replace("\n", "")) } },
+                singleLine = true,
                 textStyle = MaterialTheme.typography.headlineSmall.copy(color = MaterialTheme.colorScheme.onSurface),
                 modifier = Modifier.fillMaxWidth(),
                 decorationBox = { inner ->
@@ -288,7 +303,7 @@ fun NoteDetailScreen(
                         Column(Modifier.weight(1f)) {
                             Text("参与 AI 上下文", style = MaterialTheme.typography.titleSmall)
                             Text(
-                                "打开后，AI 调用会带上这条素材",
+                                "打开后，当前作品的 AI 调用会带上这条素材",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

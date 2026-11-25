@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import com.creativeworkbench.writer.core.ai.AiHistoryStore
+import com.creativeworkbench.writer.core.common.Breadcrumbs
 import com.creativeworkbench.writer.core.data.Block
 import com.creativeworkbench.writer.core.data.ChapterContent
 import com.creativeworkbench.writer.core.data.ChapterEntity
@@ -22,6 +23,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.text.SimpleDateFormat
@@ -62,7 +64,16 @@ class BackupService(
         val chapters = mutableListOf<ChapterBackup>()
         works.forEach { work ->
             db.chapterDao().listByWork(work.id).forEach { chapter ->
-                val blocks = runCatching { chapterFiles.read(chapter.id)?.blocks ?: emptyList() }.getOrDefault(emptyList())
+                // 读不出来就中止导出：把坏章节静默存成空正文，等于用「看起来健康」的备份
+                // 稀释掉一份还能救的旧备份，恢复后那一章就是空的。
+                val blocks = try {
+                    chapterFiles.read(chapter.id)?.blocks ?: emptyList()
+                } catch (error: Exception) {
+                    error(
+                        "章节「" + chapter.title + "」的正文文件读不出来（" +
+                            (error.message ?: "解析失败") + "），已中止备份，没有覆盖任何东西"
+                    )
+                }
                 chapters.add(chapter.toBackup(blocks))
             }
         }
@@ -371,7 +382,11 @@ class BackupService(
             }
             if (needPublic) {
                 runCatching { writeDailyPublicBackupText(text) }
+                    .onFailure { Breadcrumbs.record("每日外部备份失败：" + (it.message ?: it.javaClass.simpleName)) }
             }
+        }.onFailure { error ->
+            // 不打扰用户，但要在崩溃日志里留痕：备份长期失败，用户到恢复那天才会发现
+            Breadcrumbs.record("启动备份失败：" + (error.message ?: error.javaClass.simpleName))
         }
     }
 
@@ -420,7 +435,21 @@ class BackupService(
         val dir = File(context.filesDir, "workbench/backups").apply { mkdirs() }
         val name = "auto-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.CHINA).format(Date()) + ".json.gz"
         val file = File(dir, name)
-        GZIPOutputStream(file.outputStream()).use { it.write(text.toByteArray(Charsets.UTF_8)) }
+        // 先写 .tmp 再改名并 fsync：掉电留下一个截断的 .gz，读取侧会把它当「最新一份」，
+        // 反过来把还能解开的三份旧备份挤掉。
+        val tmp = File(dir, name + ".tmp")
+        FileOutputStream(tmp).use { out ->
+            val gz = GZIPOutputStream(out)
+            gz.write(text.toByteArray(Charsets.UTF_8))
+            gz.finish()
+            out.flush()
+            out.fd.sync()
+        }
+        if (!tmp.renameTo(file)) {
+            tmp.copyTo(file, overwrite = true)
+            tmp.delete()
+        }
+        dir.listFiles()?.filter { it.name.endsWith(".tmp") }?.forEach { runCatching { it.delete() } }
         // 只留最近 3 份
         dir.listFiles()?.filter { it.name.endsWith(".json.gz") }
             ?.sortedByDescending { it.lastModified() }
@@ -475,7 +504,16 @@ class BackupService(
     suspend fun clearAll(): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             writeLocalBackup()
-            db.workDao().observeAll().first().forEach { work -> db.workDao().delete(work.id) }
+            db.workDao().observeAll().first().forEach { work ->
+                // 先删正文文件（.json/.bak/.journal/.json.import 与快照目录）再删 DB 行，
+                // 否则「已清空」只是把入口藏起来，正文还躺在 filesDir 里。
+                db.chapterDao().listByWork(work.id).forEach { chapter ->
+                    chapterFiles.delete(chapter.id)
+                    chapterFiles.deleteSnapshots(chapter.id)
+                }
+                db.workDao().delete(work.id)
+            }
+            chapterFiles.deleteOtherThan(emptySet())
             db.noteDao().deleteAll()
             historyStore.clear()
         }

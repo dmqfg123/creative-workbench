@@ -61,6 +61,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         assembleModules()
+        // 冷启动先把「当前作品」补上：不然在笔记页新建的人物/设定 workId 为空，
+        // 永远进不了 AI 上下文（笔记页却写着「每次 AI 调用都会带上」）。
+        viewModelScope.launch {
+            if (_appState.value.currentWorkId == null) {
+                runCatching { chapterRepository.mostRecentWork() }
+                    .getOrNull()
+                    ?.let { work ->
+                        _appState.value = _appState.value.copy(currentWorkId = work.id)
+                    }
+            }
+        }
         // 启动抽检字数索引；漂移才全量重算，正常是空转。
         viewModelScope.launch {
             // 推迟到首帧之后，别和打开章节抢磁盘

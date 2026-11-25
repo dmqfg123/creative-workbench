@@ -41,6 +41,14 @@ class ChapterRepository(
 
     suspend fun work(workId: String): WorkEntity? = db.workDao().byId(workId)
 
+    /**
+     * 最近动过的作品：冷启动时 currentWorkId 是空的（只在内存里），
+     * 这时新建的人物/设定会挂不上 workId，永远进不了 AI 上下文。
+     * 用一个「最近打开」兜底，比持久化一个可能已删的 id 安全。
+     */
+    suspend fun mostRecentWork(): WorkEntity? =
+        db.workDao().observeAll().first().maxByOrNull { maxOf(it.lastOpenedAt, it.updatedAt) }
+
     suspend fun createWork(title: String, chapterTitle: String = "第一章"): WorkEntity =
         withContext(Dispatchers.IO) {
             writeMutex.withLock {

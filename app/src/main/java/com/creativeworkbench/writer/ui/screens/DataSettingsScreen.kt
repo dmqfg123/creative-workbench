@@ -80,6 +80,7 @@ fun DataSettingsScreen(onBack: () -> Unit) {
     var showExportPicker by remember { mutableStateOf(false) }
     var confirmIncludeKey by remember { mutableStateOf(false) }
     var pendingImport by remember { mutableStateOf<BackupBundle?>(null) }
+    var pendingRestore by remember { mutableStateOf<java.io.File?>(null) }
     var pendingPlugins by remember { mutableStateOf<Map<String, ByteArray>>(emptyMap()) }
 
     LaunchedEffect(Unit) {
@@ -97,6 +98,12 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                 val result = backup.export(uri, gzip = true, includeApiKey = includeKey)
                 val message = if (result.isSuccess) "已导出备份" else "导出失败：" + result.exceptionOrNull()?.message
                 Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                if (pendingClear && !result.isSuccess) {
+                    // 导出没成功就绝不能留着 pendingClear：
+                    // 否则下一次普通「导出…」成功后会被当成清空流程，直接清库。
+                    pendingClear = false
+                    Toast.makeText(context, "备份没成功，已取消清空", Toast.LENGTH_LONG).show()
+                }
                 if (pendingClear && result.isSuccess) {
                     pendingClear = false
                     val cleared = backup.clearAll()
@@ -243,6 +250,8 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                     description = if (includeKey) "含 API 密钥；可导入恢复" else "不含密钥；可导入恢复",
                     onClick = {
                         showExportPicker = false
+                        // 这是普通导出：先确保没有残留的清空标记
+                        pendingClear = false
                         exportLauncher.launch("雨刮模拟器备份.json.gz")
                     }
                 ),
@@ -350,6 +359,45 @@ fun DataSettingsScreen(onBack: () -> Unit) {
         )
     }
 
+    pendingRestore?.let { file ->
+        AlertDialog(
+            onDismissRequest = { pendingRestore = null },
+            title = { Text("用这份备份替换全部数据？") },
+            text = {
+                Text(
+                    "「" + file.name + "」会被读出来，替换当前所有作品、章节、笔记与设置（动作包不在这场替换里）。" +
+                        "现有数据会先自动备份一份，但替换后只有这一次可回退。"
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingRestore = null
+                        scope.launch {
+                            val (bundle, error) = backup.readLocalBackup(file)
+                            if (bundle == null) {
+                                Toast.makeText(context, error ?: "读取失败", Toast.LENGTH_LONG).show()
+                            } else {
+                                when (val result = backup.importReplace(bundle)) {
+                                    is ImportResult.Ok -> {
+                                        Toast.makeText(context, "已从本机备份恢复", Toast.LENGTH_SHORT).show()
+                                        works = container.database.workDao().observeAll().first()
+                                        localFiles = backup.localBackups()
+                                        lastBackup = app.container.settings.settings.value.lastBackupAt
+                                    }
+                                    is ImportResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) { Text("替换") }
+            },
+            dismissButton = { TextButton(onClick = { pendingRestore = null }) { Text("取消") } },
+            shape = MaterialTheme.shapes.large
+        )
+    }
+
     Column(Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 10.dp),
@@ -396,9 +444,10 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                     scope.launch {
                         val local = runCatching { backup.writeLocalBackup() }.getOrNull()
                         localFiles = backup.localBackups()
-                        lastBackup = System.currentTimeMillis()
+                        // 失败就别把「上次备份」写成刚刚：界面上会显示一份并不存在的备份
+                        if (local != null) lastBackup = System.currentTimeMillis()
                         val public = backup.writeDailyPublicBackup()
-                        lastSafAt = System.currentTimeMillis()
+                        if (public.isSuccess) lastSafAt = System.currentTimeMillis()
                         val publicText = public.fold({ "Download 一份" }, { "Download 失败" })
                         Toast.makeText(
                             context,
@@ -443,22 +492,7 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    TextButton(onClick = {
-                        scope.launch {
-                            val (bundle, error) = backup.readLocalBackup(file)
-                            if (bundle == null) {
-                                Toast.makeText(context, error ?: "读取失败", Toast.LENGTH_LONG).show()
-                            } else {
-                                when (val result = backup.importReplace(bundle)) {
-                                    is ImportResult.Ok -> {
-                                        Toast.makeText(context, "已从本机备份恢复", Toast.LENGTH_SHORT).show()
-                                        works = container.database.workDao().observeAll().first()
-                                    }
-                                    is ImportResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        }
-                    }) { Text("恢复") }
+                    TextButton(onClick = { pendingRestore = file }) { Text("恢复") }
                 }
             }
 
@@ -492,8 +526,11 @@ fun DataSettingsScreen(onBack: () -> Unit) {
                     text = "导出最新日志",
                     onClick = { crashExportLauncher.launch("crash-log.txt") }
                 )
-                TextButton(onClick = { CrashLogger.triggerDebugCrash() }) {
-                    Text("触发一次崩溃（调试）", color = MaterialTheme.colorScheme.error)
+                // 只在 debug 包出现：正式包里误触就是直接杀掉应用
+                if (com.creativeworkbench.writer.BuildConfig.DEBUG) {
+                    TextButton(onClick = { CrashLogger.triggerDebugCrash() }) {
+                        Text("触发一次崩溃（调试）", color = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
             Spacer(Modifier.height(40.dp))

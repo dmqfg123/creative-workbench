@@ -197,6 +197,8 @@ fun EditorScreen(
     var notesOpen by remember { mutableStateOf(false) }
     var chapterSheetOpen by remember { mutableStateOf(false) }
     var activeBlockMaxHeight by remember { mutableStateOf(320.dp) }
+    // 只有「手指点了某一段」才主动弹输入法；删段、撤销这类被动激活不该抢键盘
+    var imeRequestBlockId by remember { mutableStateOf<String?>(null) }
     val imeBottomPx = WindowInsets.ime.getBottom(density)
     var noteExpanded by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
@@ -444,6 +446,8 @@ fun EditorScreen(
                         },
                         onStartWriting = {
                             state.blocks.firstOrNull()?.let { block ->
+                                // 和点段落一样：激活即弹键盘，别让「开始写」还要再点一次
+                                imeRequestBlockId = block.id
                                 viewModel.activate(block.id, 0)
                             }
                         },
@@ -475,6 +479,7 @@ fun EditorScreen(
                                 textSizeSp = bodySize,
                                 lineHeightSp = lineHeight,
                                 maxHeight = activeBlockMaxHeight,
+                                requestIme = imeRequestBlockId == block.id,
                                 modifier = Modifier.fillMaxWidth()
                             )
                             // 段落操作条：固定跟在这一段下面，不再把按钮压在文字上
@@ -502,7 +507,10 @@ fun EditorScreen(
                             block = block,
                             textSizeSp = bodySize,
                             lineHeightSp = lineHeight,
-                            onActivate = { offset -> viewModel.activate(block.id, offset) }
+                            onActivate = { offset ->
+                                imeRequestBlockId = block.id
+                                viewModel.activate(block.id, offset)
+                            }
                         )
                     }
                 }
@@ -626,9 +634,10 @@ fun EditorScreen(
     }
 
     if (aiOpen) {
-        // PRD §5.5：结果绑定发起时的 revision 与内容哈希；不一致只能看/复制，不能写。
+        // 只看内容哈希：revision 是「写过几次」的计数器，每次自动保存都会 +1，
+        // 拿它判「正文改过没有」会把一个字没动的情况也判成过期，写入按钮白白变灰。
         val aiStale = aiState.resultText.isNotBlank() &&
-            (aiState.chapterRevision != state.revision || aiState.contentHash != viewModel.contentHash())
+            aiState.contentHash != viewModel.contentHash()
         AiPanel(
             state = aiState,
             stale = aiStale,
@@ -660,8 +669,12 @@ fun EditorScreen(
             },
             onWrite = { text ->
                 val action = aiState.action
+                var writeFailed = false
                 if (action?.write == WriteTarget.BodyReplaceSelection) {
-                    pendingSelection?.let { selection ->
+                    val selection = pendingSelection
+                    if (selection == null) {
+                        writeFailed = true
+                    } else {
                         val ok = viewModel.applyAiRewrite(
                             selection.blockId,
                             selection.start,
@@ -678,6 +691,8 @@ fun EditorScreen(
                                 after = text,
                                 insertedIds = emptyList()
                             )
+                        } else {
+                            writeFailed = true
                         }
                     }
                 } else {
@@ -691,6 +706,11 @@ fun EditorScreen(
                         after = text,
                         insertedIds = ids
                     )
+                }
+                if (writeFailed) {
+                    // 写不进去就别说「已写入」：面板留着，结果还能复制走。
+                    scope.launch { snackbar.showSnackbar("写入失败：这一段已经变了，请重新生成或手动复制") }
+                    return@AiPanel
                 }
                 aiOpen = false
                 aiViewModel.reset()
@@ -1168,6 +1188,8 @@ private fun ActiveBlockEditor(
     textSizeSp: Float,
     lineHeightSp: Float,
     maxHeight: Dp,
+    /** 是否主动弹输入法：只有用户点了这一段才为 true。 */
+    requestIme: Boolean,
     modifier: Modifier
 ) {
     val context = LocalContext.current
@@ -1184,6 +1206,8 @@ private fun ActiveBlockEditor(
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI
             setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp)
+            // 主题里正文是 Serif，EditText 默认是 sans：不显式设字体，点进段落的一瞬间字会变体
+            typeface = android.graphics.Typeface.SERIF
             setLineSpacing(0f, lineHeightSp / textSizeSp)
             gravity = Gravity.TOP or Gravity.START
             isVerticalScrollBarEnabled = false
@@ -1191,6 +1215,8 @@ private fun ActiveBlockEditor(
             setTextColor(textColor)
             setText(block.text)
             setSelection(text.length)
+            // 收起键盘后再点正文（段落还是活动状态）也要能把输入法叫回来
+            setOnClickListener { showSoftKeyboard(this) }
             customSelectionActionModeCallback = object : ActionMode.Callback {
                 override fun onCreateActionMode(mode: ActionMode?, menu: Menu?): Boolean {
                     menu?.add(0, MENU_AI_REWRITE, 0, "AI 改写")
@@ -1280,7 +1306,7 @@ private fun ActiveBlockEditor(
         delay(40)
         editText.requestFocus()
         editText.setSelection(cursorOffset.coerceIn(0, editText.text.length))
-        editText.postDelayed({ showSoftKeyboard(editText) }, 60)
+        if (requestIme) editText.postDelayed({ showSoftKeyboard(editText) }, 60)
     }
     LaunchedEffect(cursorOffset) {
         if (editText.selectionStart != cursorOffset) {
@@ -1290,7 +1316,8 @@ private fun ActiveBlockEditor(
 
     AndroidView(
         factory = { editText },
-        modifier = modifier.fillMaxWidth().heightIn(max = maxHeight),
+        // 和未激活的 Text 对齐：那边有 6dp 上下内边距，这边不加的话点一下正文会往上跳
+        modifier = modifier.fillMaxWidth().heightIn(max = maxHeight).padding(vertical = 6.dp),
         update = { view ->
             if (view.text.toString() != block.text) {
                 val selection = view.selectionStart.coerceAtLeast(0)

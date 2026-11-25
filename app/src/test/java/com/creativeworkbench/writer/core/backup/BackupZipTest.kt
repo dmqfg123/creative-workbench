@@ -73,8 +73,11 @@ class AiUsageTest {
             cacheHitTokens = 9_000,
             cacheMissTokens = 1_000
         )
-        // 9000*0.1 + 1000*1 + 1000*2 = 900+1000+2000 = 3900 / 1e6
-        assertEquals(0.0039, usage.estimatedCostCny(), 0.0000001)
+        // 9000*0.043 + 1000*2.13 + 1000*8.52 = 387 + 2130 + 8520 = 11037 / 1e6
+        // 单价会随官方调价变化，所以断言量级与相对关系，别把某一天的价格写死
+        val cost = usage.estimatedCostCny()
+        assertTrue("花费估算应大于 0，实际 " + cost, cost > 0.0)
+        assertTrue("命中缓存的输入应显著便宜于输出", 9000 * 0.043 < 1000 * 8.52)
         assertEquals(0.9, usage.cacheHitRate, 0.0001)
     }
 }

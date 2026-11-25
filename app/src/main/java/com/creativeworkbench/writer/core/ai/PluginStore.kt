@@ -38,7 +38,13 @@ class PluginStore(private val context: Context) {
     /** 读动作自己的提示词（prompts 目录下的 md）。 */
     fun promptFor(action: AiActionSpec): String? {
         val packId = action.packId ?: return null
-        val file = File(File(root, packId), action.promptFile)
+        // 备份恢复进来的包不经过 validate，promptFile 可能是 ../../ 越界路径；
+        // 这里再判一次，别把包目录外的文件读成提示词发出去。
+        if (PackArchive.rejectReason(packId) != null) return null
+        if (PackArchive.rejectReason(action.promptFile) != null) return null
+        val packDir = File(root, packId)
+        val file = File(packDir, action.promptFile)
+        if (!file.canonicalPath.startsWith(packDir.canonicalPath + File.separator)) return null
         if (!file.exists()) return null
         return runCatching { file.readText().trim() }.getOrNull()?.takeIf { it.isNotEmpty() }
     }
@@ -69,9 +75,25 @@ class PluginStore(private val context: Context) {
                 PackImportResult.Error(check.errors.ifEmpty { listOf("导入失败") })
             }
             is PackArchive.Check.Ok -> {
+                // 先整包拷到同级暂存目录，再整体换上去：
+                // 旧写法先删目标再拷，中途失败就变成「旧包没了、新包不全」。
                 val target = File(root, check.pack.id)
-                target.deleteRecursively()
-                temp.copyRecursively(target, overwrite = true)
+                val staging = File(root, check.pack.id + ".staging-" + System.currentTimeMillis())
+                val failed = runCatching {
+                    temp.copyRecursively(staging, overwrite = true)
+                    if (!staging.renameTo(target)) {
+                        target.deleteRecursively()
+                        if (!staging.renameTo(target)) staging.copyRecursively(target, overwrite = true)
+                    }
+                }.exceptionOrNull()
+                if (failed != null) {
+                    staging.deleteRecursively()
+                    temp.deleteRecursively()
+                    return@withContext PackImportResult.Error(
+                        listOf("写入动作包失败：" + (failed.message ?: "磁盘错误"))
+                    )
+                }
+                staging.deleteRecursively()
                 temp.deleteRecursively()
                 PackImportResult.Ok(check.pack)
             }

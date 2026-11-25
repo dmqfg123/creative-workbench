@@ -209,7 +209,12 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                 PillButton(
                     text = "保存",
                     onClick = {
-                        store.save(currentConfig())
+                        val config = currentConfig()
+                        if (config.baseUrl.isBlank() || config.model.isBlank()) {
+                            status = "Base URL 和模型不能为空"
+                            return@PillButton
+                        }
+                        store.save(config)
                         if (apiKey.isNotBlank()) store.saveApiKey(apiKey.trim())
                         apiKey = ""
                         status = "已保存"
@@ -219,12 +224,15 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                     text = "测试连接",
                     onClick = {
                         val config = currentConfig()
-                        store.save(config)
+                        if (config.baseUrl.isBlank() || config.model.isBlank()) {
+                            status = "先填 Base URL 和模型"
+                            return@GhostButton
+                        }
                         if (apiKey.isNotBlank()) store.saveApiKey(apiKey.trim())
                         apiKey = ""
                         val key = store.apiKey()
-                        if (key.isBlank() || config.baseUrl.isBlank() || config.model.isBlank()) {
-                            status = "先填 Base URL、模型和 API Key"
+                        if (key.isBlank()) {
+                            status = "先填 API Key"
                             return@GhostButton
                         }
                         status = "测试中…"

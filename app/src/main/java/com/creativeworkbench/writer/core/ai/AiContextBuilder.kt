@@ -58,11 +58,13 @@ class AiContextBuilder(
     ): PreparedContext {
         val chapterList = chapters.chapters(workId)
         val allNotes = noteRepository.observeAll().first()
-        val budget = ContextBudget.from(config.profile).budgetTokens.coerceAtLeast(1024)
-        val settingCap = (budget * 0.40).toInt()
-        val chapterCap = (budget * 0.40).toInt()
-        val summaryCap = (budget * 0.10).toInt()
-        val materialCap = (budget * 0.10).toInt()
+        // 分槽比例只有 ContextBudget 里一份，别在这儿再算一遍——两处比例迟早会漂。
+        val contextBudget = ContextBudget.from(config.profile)
+        val budget = contextBudget.budgetTokens.coerceAtLeast(1024)
+        val settingCap = contextBudget.settingCap.coerceAtLeast(1)
+        val chapterCap = contextBudget.chapterCap.coerceAtLeast(1)
+        val summaryCap = contextBudget.summaryCap.coerceAtLeast(1)
+        val materialCap = contextBudget.materialCap.coerceAtLeast(1)
         val notes = mutableListOf<String>()
 
         // 前一章结尾 500 字：既进上下文，也用来判断设定命中。
@@ -122,9 +124,18 @@ class AiContextBuilder(
 
         // 当前章：按动作决定窗口，超预算整段淘汰（不切半句）。
         val anchorIndex = blocks.indexOfFirst { it.id == activeBlockId }.takeIf { it >= 0 }
+        val rewriteSelectionIndex = selection
+            ?.let { selected -> blocks.indexOfFirst { it.id == selected.blockId } }
+            ?.takeIf { it >= 0 }
         val chapterFit = when (action.id) {
             AiActions.CHECK -> PromptBudget.fitBlocks(blocks, checkIndices(blocks, anchorIndex), chapterCap, anchorIndex)
-            AiActions.REWRITE -> PromptBudget.fitBlocks(blocks, rewriteIndices(blocks, selection), chapterCap, null)
+            // 选中段单独作为【选中文字】发一次，正文窗口里要把它排除，否则同一段算两遍、白花 token
+            AiActions.REWRITE -> PromptBudget.fitBlocks(
+                blocks,
+                rewriteIndices(blocks, selection).filter { it != rewriteSelectionIndex },
+                chapterCap,
+                null
+            )
             else -> PromptBudget.fitBlocks(blocks, blocks.indices.toList(), chapterCap, anchorIndex ?: blocks.lastIndex)
         }
         val chapterText = chapterFit.text
@@ -183,7 +194,7 @@ class AiContextBuilder(
             ContextBlock("正文", chapterFit.tokens, chapterCap),
             ContextBlock("摘要", summaryFit.tokens, summaryCap),
             ContextBlock("素材", materialFit.tokens, materialCap),
-            ContextBlock("前一章尾", TokenEstimator.estimate(prevTail), 500)
+            ContextBlock("前一章尾", TokenEstimator.estimate(prevTail), TokenEstimator.estimate(prevTail))
         )
         val dropped = buildList {
             injection.omitted.forEach { hit ->
@@ -236,10 +247,10 @@ class AiContextBuilder(
         return ((anchor - 2).coerceAtLeast(0)..(anchor + 2).coerceAtMost(blocks.lastIndex)).toList()
     }
 
-    /** 改写的范围：选中段前后各 5 段。 */
+    /** 改写的范围：选中段前后各 5 段（按 blockId 定位——按文本找会在重复段落上认错段）。 */
     private fun rewriteIndices(blocks: List<Block>, selection: SelectionInfo?): List<Int> {
         if (selection == null) return blocks.indices.toList()
-        val index = blocks.indexOfFirst { it.text == selection.text }.takeIf { it >= 0 } ?: 0
+        val index = blocks.indexOfFirst { it.id == selection.blockId }.takeIf { it >= 0 } ?: 0
         return ((index - 5).coerceAtLeast(0)..(index + 5).coerceAtMost(blocks.lastIndex)).toList()
     }
 

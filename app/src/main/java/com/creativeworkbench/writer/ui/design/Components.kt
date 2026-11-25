@@ -334,14 +334,19 @@ fun SearchField(
 fun Tag(
     text: String,
     active: Boolean = false,
+    enabled: Boolean = true,
     onClick: (() -> Unit)? = null
 ) {
     val bg = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceContainerHigh
-    val fg = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+    val fg = when {
+        !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+        active -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
     Surface(
         shape = CircleShape,
         color = bg,
-        modifier = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier
+        modifier = if (onClick != null && enabled) Modifier.clickable(onClick = onClick) else Modifier
     ) {
         Text(
             text,

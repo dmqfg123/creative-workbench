@@ -107,7 +107,7 @@ fun DirectoryScreen(
     if (showAdd) {
         NameDialog(
             title = "新建章节",
-            initial = "第" + (chapters.size + 1) + "章",
+            initial = nextChapterTitle(chapters),
             onDismiss = { showAdd = false },
             onConfirm = {
                 viewModel.addChapter(it)
@@ -518,6 +518,13 @@ private fun TextDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
         shape = MaterialTheme.shapes.large
     )
+}
+
+/** 默认章节名：从「第 N 章」往后找第一个没被占用的（删过章后 size+1 会重名）。 */
+private fun nextChapterTitle(chapters: List<ChapterEntity>): String {
+    var n = chapters.size + 1
+    while (chapters.any { it.title == "第" + n + "章" }) n++
+    return "第" + n + "章"
 }
 
 @Composable

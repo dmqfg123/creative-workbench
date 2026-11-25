@@ -65,6 +65,7 @@ class AiViewModel(
     )
     val state: StateFlow<AiUiState> = _state.asStateFlow()
     private var job: Job? = null
+    private var prepareJob: Job? = null
     private var lastRecord: AiHistoryRecord? = null
     private var lastBlocks: List<Block> = emptyList()
     private var lastSelection: SelectionInfo? = null
@@ -87,7 +88,9 @@ class AiViewModel(
             return
         }
         _state.value = _state.value.copy(action = action, overflow = null, error = null, resultText = "", issues = emptyList())
-        viewModelScope.launch {
+        // 连点两个动作时，慢的那次回来会把 prepared 覆盖成旧动作的上下文——直接丢掉前一次
+        prepareJob?.cancel()
+        prepareJob = viewModelScope.launch {
             val promptOverride = if (action.source == com.creativeworkbench.writer.core.ai.ActionSource.Imported) {
                 container.plugins.promptFor(action)
             } else {
@@ -220,7 +223,9 @@ class AiViewModel(
 
     fun reset() {
         job?.cancel()
-        _state.value = AiUiState()
+        prepareJob?.cancel()
+        // availableActions 不能跟着复位：导入包的动作会从动作栏里消失，直到重建 ViewModel
+        _state.value = AiUiState(availableActions = _state.value.availableActions)
     }
 
     fun store(): AiHistoryStore = historyStore

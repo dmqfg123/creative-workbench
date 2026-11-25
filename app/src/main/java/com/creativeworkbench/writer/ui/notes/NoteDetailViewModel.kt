@@ -110,6 +110,11 @@ class NoteDetailViewModel(
     }
 
     fun delete(onDone: () -> Unit) {
+        // 先掐掉待落库的防抖任务并把内存里的 note 置空：
+        // 否则删完 onDispose 还会 flush() 一次，把刚删的笔记 upsert 回来。
+        saveJob?.cancel()
+        saveJob = null
+        _state.value = _state.value.copy(note = null)
         viewModelScope.launch {
             runCatching { repository.delete(noteId) }
             onDone()
