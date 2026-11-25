@@ -10,6 +10,7 @@ import com.creativeworkbench.writer.core.data.ChapterContent
 import com.creativeworkbench.writer.core.data.ChapterEntity
 import com.creativeworkbench.writer.core.data.ChapterFileStore
 import com.creativeworkbench.writer.core.data.NoteEntity
+import com.creativeworkbench.writer.core.data.OutlineNodeEntity
 import com.creativeworkbench.writer.core.data.WorkEntity
 import com.creativeworkbench.writer.core.data.WorkbenchDatabase
 import com.creativeworkbench.writer.core.settings.AppSettings
@@ -33,7 +34,13 @@ import java.util.UUID
 import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
 
-data class BackupPreview(val works: Int, val chapters: Int, val notes: Int, val exportedAt: Long)
+data class BackupPreview(
+    val works: Int,
+    val chapters: Int,
+    val notes: Int,
+    val exportedAt: Long,
+    val outline: Int = 0
+)
 
 sealed interface ImportResult {
     data class Ok(val preview: BackupPreview) : ImportResult
@@ -78,6 +85,7 @@ class BackupService(
             }
         }
         val notes = db.noteDao().observeAll().first()
+        val outline = db.outlineDao().listAll()
         val history = historyStore.list()
         BackupBundle(
             schemaVersion = SCHEMA_VERSION,
@@ -86,6 +94,7 @@ class BackupService(
             works = works.map { it.toBackup() },
             chapters = chapters,
             notes = notes.map { it.toBackup() },
+            outline = outline.map { it.toBackup() },
             aiHistory = history.map { json.encodeToString(AiHistoryBackup.serializer(), it.toBackup()) },
             settings = settings.settings.value.toMap(),
             modules = mapOf("notes" to settings.settings.value.notesEnabled),
@@ -278,6 +287,7 @@ class BackupService(
             // 4) 数据库整包替换在一个事务里：任一条失败自动回滚
             db.withTransaction {
                 db.noteDao().deleteAll()
+                db.outlineDao().deleteAll()
                 db.chapterDao().deleteAll()
                 db.workDao().deleteAll()
                 bundle.works.forEach { work ->
@@ -327,6 +337,22 @@ class BackupService(
                         )
                     )
                 }
+                // 大纲：只恢复「作品还在」的节点，避免旧包里出现挂空作品的孤儿
+                val workIds = bundle.works.map { it.id }.toSet()
+                bundle.outline.filter { it.workId in workIds }.forEach { node ->
+                    db.outlineDao().insert(
+                        OutlineNodeEntity(
+                            id = node.id,
+                            workId = node.workId,
+                            chapterId = node.chapterId,
+                            title = node.title,
+                            content = node.content,
+                            orderIndex = node.orderIndex,
+                            createdAtMs = node.createdAtMs,
+                            updatedAtMs = node.updatedAtMs
+                        )
+                    )
+                }
             }
 
             chapterFiles.deleteOtherThan(bundle.chapters.map { it.id }.toSet())
@@ -349,7 +375,8 @@ class BackupService(
                     works = bundle.works.size,
                     chapters = bundle.chapters.size,
                     notes = bundle.notes.size,
-                    exportedAt = bundle.exportedAt
+                    exportedAt = bundle.exportedAt,
+                    outline = bundle.outline.size
                 )
             )
         }.getOrElse { error -> ImportResult.Error("导入失败：" + (error.message ?: "未知错误")) }
@@ -540,6 +567,7 @@ class BackupService(
             chapterFiles.deleteOtherThan(emptySet())
             db.snapshotDao().deleteAll()
             db.noteDao().deleteAll()
+            db.outlineDao().deleteAll()
             historyStore.clear()
         }
     }
@@ -560,6 +588,17 @@ class BackupService(
         revision = revision,
         updatedAt = updatedAt,
         blocks = blocks
+    )
+
+    private fun OutlineNodeEntity.toBackup() = OutlineBackup(
+        id = id,
+        workId = workId,
+        chapterId = chapterId,
+        title = title,
+        content = content,
+        orderIndex = orderIndex,
+        createdAtMs = createdAtMs,
+        updatedAtMs = updatedAtMs
     )
 
     private fun NoteEntity.toBackup() = NoteBackup(

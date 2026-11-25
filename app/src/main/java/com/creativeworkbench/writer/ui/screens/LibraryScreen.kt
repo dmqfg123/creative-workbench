@@ -101,6 +101,7 @@ fun LibraryScreen(
     onCreateWork: (String) -> Unit,
     onOpenWork: (String) -> Unit,
     onOpenDirectory: (String) -> Unit,
+    onOpenOutline: (String) -> Unit = {},
     onRenameWork: (String, String) -> Unit,
     onScheduleDelete: (String) -> Unit,
     onCancelDelete: (String) -> Unit,
@@ -324,6 +325,12 @@ fun LibraryScreen(
                     label = "作品目录",
                     icon = Icons.Default.List,
                     onClick = { onOpenDirectory(work.id) }
+                ),
+                SheetAction(
+                    label = "本书大纲",
+                    icon = Icons.Default.List,
+                    description = "这一章要写什么；AI 生成正文会参考",
+                    onClick = { onOpenOutline(work.id) }
                 ),
                 SheetAction(
                     label = "修改书名",

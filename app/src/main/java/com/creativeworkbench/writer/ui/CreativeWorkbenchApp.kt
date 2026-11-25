@@ -136,6 +136,7 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                         onCreateWork = viewModel::createWork,
                         onOpenWork = viewModel::openWork,
                         onOpenDirectory = { workId -> navController.navigate("directory/" + workId) },
+                        onOpenOutline = { workId -> navController.navigate("outline/" + workId) },
                         onRenameWork = viewModel::renameWork,
                         onScheduleDelete = viewModel::scheduleDeleteWork,
                         onCancelDelete = viewModel::cancelScheduledDelete,

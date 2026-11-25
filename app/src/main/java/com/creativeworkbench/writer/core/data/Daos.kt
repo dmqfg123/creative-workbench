@@ -115,6 +115,12 @@ interface OutlineDao {
     @Query("SELECT * FROM outline_nodes WHERE workId = :workId ORDER BY orderIndex ASC")
     suspend fun listByWork(workId: String): List<OutlineNodeEntity>
 
+    @Query("SELECT * FROM outline_nodes ORDER BY workId ASC, orderIndex ASC")
+    suspend fun listAll(): List<OutlineNodeEntity>
+
+    @Query("DELETE FROM outline_nodes")
+    suspend fun deleteAll()
+
     @Query("SELECT * FROM outline_nodes WHERE id = :id")
     suspend fun byId(id: String): OutlineNodeEntity?
 

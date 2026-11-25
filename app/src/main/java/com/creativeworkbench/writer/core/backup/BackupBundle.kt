@@ -11,6 +11,8 @@ data class BackupBundle(
     val works: List<WorkBackup> = emptyList(),
     val chapters: List<ChapterBackup> = emptyList(),
     val notes: List<NoteBackup> = emptyList(),
+    /** 大纲节点。0.13.3 起进备份：之前导出的旧包没有这个字段，恢复后大纲为空（不报错）。 */
+    val outline: List<OutlineBackup> = emptyList(),
     val aiHistory: List<String> = emptyList(),
     val settings: Map<String, String> = emptyMap(),
     val modules: Map<String, Boolean> = emptyMap(),
@@ -59,6 +61,18 @@ data class NoteBackup(
     val createdAtMs: Long,
     val updatedAtMs: Long,
     val sourceNoteId: String? = null
+)
+
+@Serializable
+data class OutlineBackup(
+    val id: String,
+    val workId: String,
+    val chapterId: String? = null,
+    val title: String,
+    val content: String = "",
+    val orderIndex: Int,
+    val createdAtMs: Long,
+    val updatedAtMs: Long
 )
 
 @Serializable
