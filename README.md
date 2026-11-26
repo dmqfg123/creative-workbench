@@ -22,7 +22,9 @@
 
 ## 下载
 
-- 安装包（4.05 MB，versionCode 101）：[下载 APK](https://github.com/dmqfg123/creative-workbench/blob/main/release/creative-workbench-1.0.1.apk?raw=true)（点开后右上角「Download raw file」）
+- **下载 APK**（4.05 MB，versionCode 101）：
+  - 发布资产（推荐）：[creative-workbench-1.0.1.apk](https://github.com/dmqfg123/creative-workbench/releases/download/v1.0.1/creative-workbench-1.0.1.apk)
+  - 仓库内备份：[release/creative-workbench-1.0.1.apk](https://github.com/dmqfg123/creative-workbench/blob/main/release/creative-workbench-1.0.1.apk?raw=true)
 - 发布页：[Releases · v1.0.1](https://github.com/dmqfg123/creative-workbench/releases/tag/v1.0.1)
 
 > 侧载安装：Android 13+，允许「安装未知来源应用」。首次启动后到「更多 → AI 助手」填 Base URL 与 API Key。
