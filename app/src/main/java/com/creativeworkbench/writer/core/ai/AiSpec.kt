@@ -132,9 +132,11 @@ object ModelCatalog {
             // 单请求输出上限按模型目录声明，DSH 的默认值是 256_000
             // （dsh-llm-deepseek/src/defaults.ts: DEFAULT_MAX_TOKENS）。
             contextWindowTokens = 1_048_576,
-            maxOutputTokens = 256_000,
-            requestMaxTokens = 4_096,
-            thinkingMaxTokens = 16_384,
+            // 官方口径：单次输出 1..384K；不传时非思考默认 8K、思考默认 64K（effort=max 时 128K）。
+            maxOutputTokens = 393_216,
+            // 我们不给满额：写作场景 8K 足够一段长续写，思考模式给 32K 防止思维链把正文额度烧光。
+            requestMaxTokens = 8_192,
+            thinkingMaxTokens = 32_768,
             // 官方建议创作写作 1.5，但真机实测 1.5 会跑飞（2500+ 字、结构错乱，甚至吐 XML 片段）；
             // 1.2 在“有文采”和“收得住”之间稳定得多。思考模式不认 temperature，请求时不发。
             temperature = 1.2,

@@ -16,8 +16,8 @@ class ModelCatalogTest {
     fun deepSeekOfficialGetsOneMegabyteWindow() {
         val profile = ModelCatalog.profileFor("https://api.deepseek.com", "deepseek-flash")
         assertEquals(1_048_576, profile.contextWindowTokens)
-        // 输出上限按 DSH 的 deepseek 目录默认值 256_000（dsh-llm-deepseek/src/defaults.ts）
-        assertEquals(256_000, profile.maxOutputTokens)
+        // 官方 v4.1 口径：单次输出 1..384K
+        assertEquals(393_216, profile.maxOutputTokens)
         assertTrue(profile.supportsThinking)
         // 预算窗口只取 1/4，别因为模型有 1M 就一次塞满
         assertEquals(ModelCatalog.CONTEXT_BUDGET_TOKEN_CAP, profile.budgetWindowTokens)
@@ -50,7 +50,7 @@ class ModelCatalogTest {
         val bounded = profile.request(ActionTuning(maxTokens = 4096), globalThinking = false)
         assertEquals(4096, bounded.maxTokens)
         val tooBig = profile.request(ActionTuning(maxTokens = 9_999_999), globalThinking = false)
-        assertEquals(256_000, tooBig.maxTokens)
+        assertEquals(393_216, tooBig.maxTokens)
     }
 
     @Test

@@ -22,7 +22,7 @@ class AiClientPayloadTest {
         val json = payload(AiConfig(model = "deepseek-flash", deepThinking = false))
         assertEquals(1.2, json.getDouble("temperature"), 0.0001)
         assertEquals("disabled", json.getJSONObject("thinking").getString("type"))
-        assertEquals(4096, json.getInt("max_tokens"))
+        assertEquals(8192, json.getInt("max_tokens"))
         assertFalse(json.getBoolean("stream"))
     }
 
@@ -31,7 +31,7 @@ class AiClientPayloadTest {
         val json = payload(AiConfig(model = "deepseek-flash", deepThinking = true))
         assertFalse("思考模式不该发 temperature", json.has("temperature"))
         assertEquals("enabled", json.getJSONObject("thinking").getString("type"))
-        assertEquals(16384, json.getInt("max_tokens"))
+        assertEquals(32768, json.getInt("max_tokens"))
     }
 
     @Test

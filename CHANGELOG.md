@@ -2,6 +2,16 @@
 
 # CHANGELOG
 
+## 0.19.0（2026-11-26）全面适配 DeepSeek v4.1
+
+依据官方 Chat Completions 文档（v4.1）：
+- max_tokens：官方 1..384K，不传时非思考 8K、思考 64K（effort=max 128K）。原实现请求 4K/思考 16K 且夹 1K–8K → 改为 8K/32K，夹取 1K–16K / 16K–64K。
+- finish_reason 新增 insufficient_system_resource（可重试）与 aborted（不可重试），原实现当未知原因。
+- maxOutputTokens 256K→384K（官方口径）。
+- thinking/reasoning_effort：官方「省略两者默认开启思考」；我们始终显式发 thinking，行为可控。
+- 未加 top_p（v4-pro 思考+工具会被忽略）；temperature 思考模式不发（官方不生效）。
+- 测试同步：ModelCatalogTest / AiClientPayloadTest 4 条更新，123 条全绿。
+
 ## 0.18.11（2026-11-26）AI 设置页隐藏「自动套用」参数卡片
 
 用户要求那块「自动套用 · 上下文窗口 / 单次输出上限 / temperature / 超时」不要显示。

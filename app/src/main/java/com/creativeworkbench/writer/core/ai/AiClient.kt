@@ -214,6 +214,13 @@ class AiClient {
         if (finish == "content_filter" || message?.optString("refusal").orEmpty().isNotBlank()) {
             return Attempt.Fail(CONTENT_FILTER_MESSAGE, false, null)
         }
+        // 官方新增的两个结束原因：资源不足可以重试；被中止重试也没用。
+        if (finish == "insufficient_system_resource") {
+            return Attempt.Fail("服务端资源不足（insufficient_system_resource），正在重试…", true, null)
+        }
+        if (finish == "aborted") {
+            return Attempt.Fail("请求被中止（aborted），重试也没用；稍后再试。", false, null)
+        }
         if (content.isBlank() && toolCalls.isEmpty()) {
             return if (finish == "length") {
                 Attempt.Fail("输出被截断：这次思考把额度用完了。重试一次，或先关掉「深度思考」。", false, null)
@@ -286,6 +293,12 @@ class AiClient {
         val content = builder.toString()
         if (finish == "content_filter" || refusalSeen) {
             return Attempt.Fail(CONTENT_FILTER_MESSAGE, false, null)
+        }
+        if (finish == "insufficient_system_resource") {
+            return Attempt.Fail("服务端资源不足（insufficient_system_resource），正在重试…", true, null)
+        }
+        if (finish == "aborted") {
+            return Attempt.Fail("请求被中止（aborted），重试也没用；稍后再试。", false, null)
         }
         val toolCalls = toolAccumulator.values
             .filter { it.name.isNotBlank() }

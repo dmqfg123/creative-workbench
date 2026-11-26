@@ -269,12 +269,12 @@ class AiViewModel(
             AiActions.REWRITE -> (((lastSelection?.text?.length ?: 600) * 1.6).toInt() + 512)
             else -> (_state.value.lengthChars * 1.8).toInt()
         }
+        // 官方：v4.1 单次输出上限 384K，不传时非思考默认 8K、思考默认 64K。
+        // 我们按动作给量，不再死卡 4K（旧上限会把长续写/长改写从中间截断）。
         return if (config.deepThinking) {
-            // 思考模式的思维链和正文共用 max_tokens：给到 1024 的话，光思考就把额度烧完，
-            // 正文为空且 finish_reason=length。思考模式下至少给 8K。
-            wanted.coerceIn(8_192, 16_384)
+            wanted.coerceIn(16_384, 65_536)
         } else {
-            wanted.coerceIn(1_024, 8_192)
+            wanted.coerceIn(1_024, 16_384)
         }
     }
 
