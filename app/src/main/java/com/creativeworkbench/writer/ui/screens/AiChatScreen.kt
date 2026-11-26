@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -53,6 +54,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.creativeworkbench.writer.core.ai.ToolProposal
 import com.creativeworkbench.writer.core.data.NoteKind
 import com.creativeworkbench.writer.ui.chat.AiChatViewModel
 import com.creativeworkbench.writer.ui.chat.AiChatViewModelFactory
@@ -76,6 +78,7 @@ fun AiChatScreen(
     )
     val state by viewModel.state.collectAsStateWithLifecycle()
     var draft by remember { mutableStateOf("") }
+    var importOpen by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val clipboard = LocalClipboardManager.current
 
@@ -84,6 +87,13 @@ fun AiChatScreen(
         if (state.turns.isNotEmpty()) {
             listState.animateScrollToItem(state.turns.lastIndex)
         }
+    }
+
+    if (importOpen) {
+        com.creativeworkbench.writer.ui.textimport.TextImportSheet(
+            workId = workId,
+            onDismiss = { importOpen = false }
+        )
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -144,6 +154,21 @@ fun AiChatScreen(
             }
         }
 
+        if (state.notice.isNotBlank()) {
+            Surface(
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                shape = MaterialTheme.shapes.small
+            ) {
+                Text(
+                    state.notice,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.padding(10.dp)
+                )
+            }
+        }
+
         if (state.error != null) {
             Surface(
                 color = MaterialTheme.colorScheme.errorContainer,
@@ -166,6 +191,36 @@ fun AiChatScreen(
                 .navigationBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 6.dp)
         ) {
+            // 待确认的写入固定在输入框上方：夹在对话流里会被挤到看不见的地方，
+            // 用户就不知道「它说要记下来」其实还没落库。
+            if (state.proposals.isNotEmpty()) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 260.dp)
+                        .verticalScroll(rememberScrollState())
+                        .padding(bottom = 4.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "待确认的写入 " + state.proposals.count { !it.applied } + " 条",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (state.proposals.count { !it.applied } > 1) {
+                            TextButton(onClick = { viewModel.applyAllProposals() }) { Text("全部应用") }
+                        }
+                    }
+                    state.proposals.forEach { proposal ->
+                        ProposalCard(
+                            proposal = proposal,
+                            onApply = { viewModel.applyProposal(proposal.id) },
+                            onDismiss = { viewModel.dismissProposal(proposal.id) }
+                        )
+                    }
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -187,6 +242,20 @@ fun AiChatScreen(
                     active = state.includeNotes,
                     enabled = workId != null,
                     onClick = { viewModel.setIncludeNotes(!state.includeNotes) }
+                )
+                // 读写项目：勾上后 AI 能查章节/搜设定，并把讨论结果写成待确认的提案
+                Tag(
+                    text = "读写项目",
+                    active = state.toolsEnabled && workId != null,
+                    enabled = workId != null,
+                    onClick = { viewModel.setToolsEnabled(!state.toolsEnabled) }
+                )
+                // 手上有一大段现成文字时，逐段粘进对话既贵又乱：直接走结构化导入
+                Tag(
+                    text = "整理文本",
+                    active = false,
+                    enabled = workId != null,
+                    onClick = { importOpen = true }
                 )
                 if (state.sending) {
                     CircularProgressIndicator(
@@ -266,6 +335,62 @@ fun AiChatScreen(
     }
 }
 
+/** 一条写入提案：看得见要写什么，点「应用」才落库。 */
+@Composable
+private fun ProposalCard(
+    proposal: ToolProposal,
+    onApply: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    proposal.label + " · " + proposal.target,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    if (proposal.applied) "已应用" else "待确认",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (proposal.applied) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    }
+                )
+            }
+            Text(proposal.title, style = MaterialTheme.typography.bodyMedium)
+            if (proposal.preview.isNotBlank()) {
+                Text(
+                    proposal.preview,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 6
+                )
+            }
+            proposal.applyError?.let { message ->
+                Text(
+                    "写入失败：" + message,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            if (!proposal.applied) {
+                Row {
+                    TextButton(onClick = onDismiss) { Text("忽略") }
+                    TextButton(onClick = onApply) { Text("应用") }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun ChatBubble(
     turn: ChatTurn,
@@ -318,6 +443,27 @@ private fun ChatBubble(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+                }
+                // 工具执行记录：让用户看见「它到底查了什么、改了什么」，而不是凭空自信
+                if (turn.toolRuns.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "工具 " + turn.toolRuns.size + " 次",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    turn.toolRuns.take(8).forEach { run ->
+                        Text(
+                            (if (run.ok) "· " else "× ") + run.label + "：" + run.summary,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (run.ok) {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            },
+                            maxLines = 2
                         )
                     }
                 }

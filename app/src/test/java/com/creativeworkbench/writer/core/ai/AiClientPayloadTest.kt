@@ -45,6 +45,73 @@ class AiClientPayloadTest {
     }
 
     @Test
+    fun toolsAreDeclaredAsOpenAiFunctions() {
+        val json = AiClient().buildPayload(
+            config = AiConfig(model = "deepseek-flash"),
+            tuning = ActionTuning(),
+            messages = messages,
+            tools = listOf(
+                AiToolSpec(
+                    name = "create_note",
+                    description = "新建笔记",
+                    parameters = ToolSchema.obj(listOf("title"), "title" to ToolSchema.str("标题")),
+                    mutating = true
+                )
+            )
+        )
+        assertEquals("auto", json.getString("tool_choice"))
+        val tool = json.getJSONArray("tools").getJSONObject(0)
+        assertEquals("function", tool.getString("type"))
+        val function = tool.getJSONObject("function")
+        assertEquals("create_note", function.getString("name"))
+        assertEquals(
+            1,
+            function.getJSONObject("parameters").getJSONArray("required").length()
+        )
+    }
+
+    @Test
+    fun assistantToolCallsSurviveRoundTrip() {
+        val calls = listOf(ToolCall("call_1", "search_notes", "{\"query\":\"林\"}"))
+        val json = AiClient().buildPayload(
+            config = AiConfig(model = "deepseek-flash"),
+            tuning = ActionTuning(),
+            messages = listOf(
+                ChatMessage("user", "查一下"),
+                ChatMessage("assistant", "", calls),
+                ChatMessage("tool", "没找到", toolCallId = "call_1")
+            )
+        )
+        val list = json.getJSONArray("messages")
+        val assistant = list.getJSONObject(1)
+        assertEquals("tool_calls 必须原样带回", true, assistant.has("tool_calls"))
+        assertEquals(
+            "call_1",
+            assistant.getJSONArray("tool_calls").getJSONObject(0).getString("id")
+        )
+        assertEquals("call_1", list.getJSONObject(2).getString("tool_call_id"))
+    }
+
+    @Test
+    fun jsonModeOnlyForDeepSeek() {
+        val deepSeek = AiClient().buildPayload(
+            config = AiConfig(model = "deepseek-flash"),
+            tuning = ActionTuning(),
+            messages = messages,
+            jsonMode = true
+        )
+        assertEquals("json_object", deepSeek.getJSONObject("response_format").getString("type"))
+
+        val generic = AiClient().buildPayload(
+            config = AiConfig(baseUrl = "https://example.com/v1", model = "gpt-4o-mini"),
+            tuning = ActionTuning(),
+            messages = messages,
+            jsonMode = true
+        )
+        assertEquals("通用服务不该收到 response_format", false, generic.has("response_format"))
+    }
+
+    @Test
     fun genericCompatibleServerNeverGetsDeepSeekFields() {
         val json = payload(AiConfig(baseUrl = "https://example.com/v1", model = "gpt-4o-mini"))
         assertFalse("通用服务不该收到 thinking", json.has("thinking"))

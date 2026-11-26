@@ -19,10 +19,19 @@ data class AppSettings(
     val lastBackupAt: Long? = null,
     val lastExportAt: Long? = null,
     val librarySort: LibrarySort = LibrarySort.Recent,
-    val lastSafBackupAt: Long? = null
+    val lastSafBackupAt: Long? = null,
+    /**
+     * AI 面板的「记住上次」偏好：设定挑选模式、手动勾掉的设定、来源开关、字数、正文范围。
+     * 用一张字符串表存，免得每加一个开关就改一次 AppSettings + load() + 存取方法三处。
+     */
+    val aiPrefs: Map<String, String> = emptyMap()
 )
 
 class SettingsRepository(context: Context) {
+    private companion object {
+        const val AI_PREF_PREFIX = "ai_pref_"
+    }
+
     private val prefs = context.applicationContext.getSharedPreferences("workbench_settings", Context.MODE_PRIVATE)
     private val _settings = MutableStateFlow(load())
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
@@ -40,7 +49,10 @@ class SettingsRepository(context: Context) {
         lastExportAt = prefs.getLong("last_export_at", 0L).takeIf { it > 0L },
         librarySort = runCatching { LibrarySort.valueOf(prefs.getString("library_sort", LibrarySort.Recent.name)!!) }
             .getOrDefault(LibrarySort.Recent),
-        lastSafBackupAt = prefs.getLong("last_saf_backup_at", 0L).takeIf { it > 0L }
+        lastSafBackupAt = prefs.getLong("last_saf_backup_at", 0L).takeIf { it > 0L },
+        aiPrefs = prefs.all.entries
+            .filter { it.key.startsWith(AI_PREF_PREFIX) && it.value is String }
+            .associate { it.key.removePrefix(AI_PREF_PREFIX) to it.value as String }
     )
 
     fun setTheme(mode: ThemeMode) {
@@ -57,6 +69,18 @@ class SettingsRepository(context: Context) {
         prefs.edit().putString("library_sort", sort.name).apply()
         _settings.value = _settings.value.copy(librarySort = sort)
     }
+
+    /**
+     * 记一条 AI 面板偏好（设定模式 / 手动勾选 / 来源开关 / 字数 / 正文范围）。
+     * 每次改动立刻落盘：面板关掉再打开必须原样回来，这是用户最直接的不满点。
+     */
+    fun rememberAiPref(key: String, value: String) {
+        prefs.edit().putString(AI_PREF_PREFIX + key, value).apply()
+        _settings.value = _settings.value.copy(aiPrefs = _settings.value.aiPrefs + (key to value))
+    }
+
+    fun aiPref(key: String, fallback: String = ""): String =
+        _settings.value.aiPrefs[key] ?: fallback
 
     fun setNotesEnabled(enabled: Boolean) {
         prefs.edit().putBoolean("notes_enabled", enabled).apply()

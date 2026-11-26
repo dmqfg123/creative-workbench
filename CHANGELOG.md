@@ -2,6 +2,38 @@
 
 # CHANGELOG
 
+## 0.18.0（2026-11-26）AI 与项目打通：设定自选 / 工具调用 / 文本导入
+
+**一、设定不再默认全选（用户最直接的不满）**
+新增 `NoteContextMode`（自动/全部/手动/关），默认自动：
+`NoteRetriever` 用 MentionIndex 同一套命中规则打分出候选（命中×10 + 类型 + 置顶 + 别名，池上限 36），
+`NoteSelector` 再让模型从候选里挑（非流式，max_tokens 256、温度 0、关思考、json_object），只注入挑中的；
+未配 Key/候选≤5/解析失败退回本地打分。结果按「章节+动作+预算+候选」SHA-256 缓存，反复点 chip 不重复花钱。
+面板显示「AI 挑了 2/10 条 · 约 719 tokens」与逐条理由，可临时取消；手动模式照旧可逐条勾选与全选。
+**面板偏好落盘**（`SettingsRepository.aiPrefs`）：模式、手动勾掉的 id、字数、正文范围、来源开关，关面板/换章/重启都保持。
+`SettingInjector` 顺带修两处：置顶条目改为常驻桶（先装、不参与淘汰）；预算溢出用 continue 而不是停止。
+
+**二、AI 对话能读写项目（工具调用）**
+`AiClient` 支持 OpenAI 函数调用：`tools`/`tool_choice`、流式 `delta.tool_calls` 按 index 累积、
+`ChatMessage.toolCalls/toolCallId`、`role:tool` 回喂；服务端联网工具与本地工具合进同一数组。
+`ProjectTools` 13 个工具：读（list_chapters/read_chapter≤3000字/search_notes/read_note/list_outline/list_foreshadowing）直接执行；
+写（create_note/update_note/create_outline_node/update_outline_node/append_chapter_text/set_chapter_summary/add_foreshadowing）
+只出 `ToolProposal`，界面固定在输入框上方，点「应用」才落库；正文写入带 revision 冲突校验，绝不覆盖正在编辑的章节。
+回合制最多 6 轮、每轮 ≤6 个调用；工具开启时附「项目速览」（章节清单+条数）省探索调用；工具场景强制关思考。
+
+**三、文本 → 结构化资料**
+`ChapterSplitter` 本地认「第N章/序章/楔子/尾声/番外」（<2 章则整段一个切片）；
+`TextStructurer` 逐章一次 json_object 调用抽 `{notes,outline,foreshadowing}`（截 6000 字/章，max_tokens 2048，温度 0.2）；
+同名同类型去重后按组勾选（显示本次 token 与花费），未勾选不落库。入口：笔记页/大纲页/AI 对话「整理文本」。
+
+**验证**：119 条单测全绿（新增 NoteRetrieverTest 6、ChapterSplitterTest 4、payload 3）；
+Node 脚本实测 DeepSeek `finish_reason=tool_calls` 与 `role:tool` 回喂；
+真机 0.18.0：设定自动挑 2/10 条、对话「加大纲节点」提案→应用成功（绑定第 2 章）、导入 1 章 9 条→笔记 5/大纲 3/伏笔 1。
+真机顺带修两处：流式内容被重复拼接；提案卡片夹在对话流末尾被挤出可视区（改为固定输入框上方）。
+未改续写/改写/摘要/检查的提示词与默认参数，按规则无需重跑 ai-eval。
+
+**已知未做**：写入提案不弹二次确认框（点「应用」即落库）；未做「引用某章」chip；未做摘要冻结/事实账本。
+
 ## 0.17.1（2026-11-26）修光标过大与行距炸开
 
 用户 17:02 反馈截图：光标有 3–4 行高、每行之间空一大截、编辑时「很多行正文变成只有一行」。

@@ -83,6 +83,7 @@ fun OutlineScreen(
     var confirmDelete by remember { mutableStateOf<OutlineNodeEntity?>(null) }
     var showTemplates by remember { mutableStateOf(false) }
     var showForeshadow by remember { mutableStateOf(false) }
+    var showImport by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -141,6 +142,11 @@ fun OutlineScreen(
                             active = state.openForeshadow.isNotEmpty(),
                             onClick = { showForeshadow = true }
                         )
+                        Tag(
+                            text = "从文本导入",
+                            active = false,
+                            onClick = { showImport = true }
+                        )
                     }
                 }
             }
@@ -161,6 +167,7 @@ fun OutlineScreen(
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             PillButton(text = "新建第一条", icon = Icons.Default.Add, onClick = { creating = true })
                             GhostButton(text = "套模板", onClick = { showTemplates = true })
+                            GhostButton(text = "从文本导入", onClick = { showImport = true })
                         }
                     }
                 }
@@ -312,6 +319,13 @@ fun OutlineScreen(
             onMarkPaid = { item, chapterId -> viewModel.markForeshadowPaid(item, chapterId) },
             onDelete = { viewModel.deleteForeshadow(it) },
             onDismiss = { showForeshadow = false }
+        )
+    }
+
+    if (showImport) {
+        com.creativeworkbench.writer.ui.textimport.TextImportSheet(
+            workId = workId,
+            onDismiss = { showImport = false }
         )
     }
 

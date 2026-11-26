@@ -12,7 +12,16 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-data class ChatMessage(val role: String, val content: String)
+/**
+ * 一条消息。带 toolCalls 的是 assistant 的「我要调用工具」；
+ * toolCallId 非空的是 role=tool 的执行结果。其它情况两个字段都空。
+ */
+data class ChatMessage(
+    val role: String,
+    val content: String,
+    val toolCalls: List<ToolCall> = emptyList(),
+    val toolCallId: String? = null
+)
 
 /** 一次调用的 token 账：DeepSeek 会额外给缓存命中/未命中。 */
 data class AiUsage(
@@ -51,8 +60,10 @@ sealed interface AiCallResult {
     data class Ok(
         val content: String,
         val usage: AiUsage? = null,
-        /** "stop" 正常结束；"length" 撞到 max_tokens 被截断（要续写拼接）。 */
-        val finishReason: String? = null
+        /** "stop" 正常结束；"length" 撞到 max_tokens 被截断（要续写拼接）；"tool_calls" 要执行工具。 */
+        val finishReason: String? = null,
+        /** 模型要求调用的工具（可能为空）。 */
+        val toolCalls: List<ToolCall> = emptyList()
     ) : AiCallResult {
         val truncated: Boolean get() = finishReason == "length"
     }
@@ -90,13 +101,21 @@ class AiClient {
         retryPolicy: RetryPolicy = RetryPolicy(),
         hooks: AiStreamHooks? = null,
         /** 声明 DeepSeek 服务端联网工具：模型自己决定搜不搜，搜索在服务端跑。 */
-        webSearch: Boolean = false
+        webSearch: Boolean = false,
+        /** 本地工具（读写项目）。模型自己决定调不调；执行在客户端。 */
+        tools: List<AiToolSpec>? = null,
+        /**
+         * 要模型输出 JSON 时打开：DeepSeek 的 response_format=json_object 能显著减少
+         * 代码围栏和多余解释（客户端仍要能容错，见 JsonSalvage）。只对 DeepSeek 发，
+         * 通用兼容服务的支持参差不齐，发了可能 400。
+         */
+        jsonMode: Boolean = false
     ): AiCallResult = withContext(Dispatchers.IO) {
         val endpoint = endpointFor(config)
             ?: return@withContext AiCallResult.Error("Base URL 不合法：只支持 https；打开「允许明文 HTTP」后才允许 http")
         val params = config.profile.request(tuning, config.deepThinking)
         val stream = hooks != null
-        val payload = buildPayload(config, tuning, messages, stream, webSearch)
+        val payload = buildPayload(config, tuning, messages, stream, webSearch, tools, jsonMode)
 
         val client = OkHttpClient.Builder()
             .connectTimeout(20L, TimeUnit.SECONDS)
@@ -186,9 +205,11 @@ class AiClient {
             return Attempt.Fail(error.optString("message").ifBlank { "服务端返回错误" }, true, null)
         }
         val choice = parsed.optJSONArray("choices")?.optJSONObject(0)
-        val content = choice?.optJSONObject("message")?.optString("content").orEmpty()
+        val message = choice?.optJSONObject("message")
+        val content = message?.optString("content").orEmpty()
         val finish = choice?.optString("finish_reason")?.takeIf { it.isNotEmpty() }
-        if (content.isBlank()) {
+        val toolCalls = parseToolCalls(message?.optJSONArray("tool_calls"))
+        if (content.isBlank() && toolCalls.isEmpty()) {
             return if (finish == "length") {
                 Attempt.Fail("输出被截断：这次思考把额度用完了。重试一次，或先关掉「深度思考」。", false, null)
             } else {
@@ -196,7 +217,9 @@ class AiClient {
                 Attempt.Fail("模型返回为空", true, null)
             }
         }
-        return Attempt.Ok(AiCallResult.Ok(content.trim(), parseUsage(parsed.optJSONObject("usage")), finish))
+        return Attempt.Ok(
+            AiCallResult.Ok(content.trim(), parseUsage(parsed.optJSONObject("usage")), finish, toolCalls)
+        )
     }
 
     /** SSE：逐行读 data: {...}，把 delta.content 增量吐出去；中途的 error 事件当失败。 */
@@ -210,6 +233,8 @@ class AiClient {
         val builder = StringBuilder()
         var finish: String? = null
         var usage: AiUsage? = null
+        // 流式下 tool_calls 是分片到达的：id/name 可能只在第一片，arguments 一片一片拼。
+        val toolAccumulator = LinkedHashMap<Int, MutableToolCall>()
         while (true) {
             val line = source.readUtf8Line() ?: break
             if (line.isBlank() || line.startsWith(":")) continue // 心跳注释
@@ -231,6 +256,19 @@ class AiClient {
             val delta = choice.optJSONObject("delta") ?: continue
             val reasoning = delta.optString("reasoning_content")
             if (reasoning.isNotEmpty()) hooks.onReasoning(reasoning)
+            delta.optJSONArray("tool_calls")?.let { fragments ->
+                for (index in 0 until fragments.length()) {
+                    val fragment = fragments.optJSONObject(index) ?: continue
+                    val slot = fragment.optInt("index", index)
+                    val slotData = toolAccumulator.getOrPut(slot) { MutableToolCall() }
+                    fragment.optString("id").takeIf { it.isNotEmpty() }?.let { slotData.id = it }
+                    val function = fragment.optJSONObject("function") ?: continue
+                    function.optString("name").takeIf { it.isNotEmpty() }?.let { slotData.name = it }
+                    function.optString("arguments").takeIf { it.isNotEmpty() }?.let {
+                        slotData.arguments.append(it)
+                    }
+                }
+            }
             val text = delta.optString("content")
             if (text.isNotEmpty()) {
                 builder.append(text)
@@ -239,14 +277,17 @@ class AiClient {
             }
         }
         val content = builder.toString()
-        if (content.isBlank()) {
+        val toolCalls = toolAccumulator.values
+            .filter { it.name.isNotBlank() }
+            .map { ToolCall(id = it.id.ifBlank { "call_" + it.name }, name = it.name, arguments = it.arguments.toString()) }
+        if (content.isBlank() && toolCalls.isEmpty()) {
             return if (finish == "length") {
                 Attempt.Fail("输出被截断：这次思考把额度用完了。重试一次，或先关掉「深度思考」。", false, null)
             } else {
                 Attempt.Fail("模型返回为空", true, null)
             }
         }
-        return Attempt.Ok(AiCallResult.Ok(content.trim(), usage, finish))
+        return Attempt.Ok(AiCallResult.Ok(content.trim(), usage, finish, toolCalls))
     }
 
     /**
@@ -258,7 +299,9 @@ class AiClient {
         tuning: ActionTuning,
         messages: List<ChatMessage>,
         stream: Boolean = false,
-        webSearch: Boolean = false
+        webSearch: Boolean = false,
+        tools: List<AiToolSpec>? = null,
+        jsonMode: Boolean = false
     ): JSONObject {
         val profile = config.profile
         val params = profile.request(tuning, config.deepThinking)
@@ -271,27 +314,77 @@ class AiClient {
                 put("thinking", JSONObject().put("type", if (params.thinking) "enabled" else "disabled"))
             }
             put("stream", stream)
+            // 结构化输出：DeepSeek 只认 "json_object"，且要求提示词里出现 json 字样（我们的提示词都有）。
+            if (jsonMode && profile.supportsThinking) {
+                put("response_format", JSONObject().put("type", "json_object"))
+            }
             // 流式默认不带 usage；DeepSeek 支持 include_usage，带上才能显示缓存命中与花费。
             if (stream && profile.supportsThinking) {
                 put("stream_options", JSONObject().put("include_usage", true))
             }
             // 服务端联网：只声明工具，客户端不执行任何东西；模型自己决定搜不搜。
             // 注意 tool_choice 不能点名这两个工具，否则 400。
-            if (webSearch && profile.supportsThinking) {
+            // 服务端工具与本地函数工具共用一个 tools 数组——分两次 put 会互相覆盖。
+            val serverTools = if (webSearch && profile.supportsThinking) {
+                JSONArray().apply {
+                    put(JSONObject().put("type", "deepseek_web_search"))
+                    put(JSONObject().put("type", "deepseek_read_url"))
+                }
+            } else {
+                null
+            }
+            val localTools = if (!tools.isNullOrEmpty()) ToolSchema.arrayOf(tools) else null
+            if (serverTools != null || localTools != null) {
                 put(
                     "tools",
                     JSONArray().apply {
-                        put(JSONObject().put("type", "deepseek_web_search"))
-                        put(JSONObject().put("type", "deepseek_read_url"))
+                        serverTools?.let { array ->
+                            for (index in 0 until array.length()) put(array.get(index))
+                        }
+                        localTools?.let { array ->
+                            for (index in 0 until array.length()) put(array.get(index))
+                        }
                     }
                 )
             }
+            // 本地函数工具才需要 tool_choice；服务端工具点名会 400。
+            if (localTools != null) {
+                put("tool_choice", "auto")
+            }
             put("messages", JSONArray().apply {
-                messages.forEach { message ->
-                    put(JSONObject().put("role", message.role).put("content", message.content))
-                }
+                messages.forEach { message -> put(serializeMessage(message)) }
             })
         }
+    }
+
+    /**
+     * 一条消息的线上形态：
+     * - assistant 带工具调用时 content 可以是空串，tool_calls 必须原样带上，
+     *   否则下一轮模型看不到自己请求过什么，会重复调用同一个工具；
+     * - role=tool 的消息用 tool_call_id 对上号。
+     */
+    private fun serializeMessage(message: ChatMessage): JSONObject {
+        val json = JSONObject().put("role", message.role)
+        if (message.role == "assistant" && message.toolCalls.isNotEmpty()) {
+            if (message.content.isNotBlank()) json.put("content", message.content) else json.put("content", JSONObject.NULL)
+            json.put("tool_calls", JSONArray().apply {
+                message.toolCalls.forEach { call ->
+                    put(
+                        JSONObject()
+                            .put("id", call.id)
+                            .put("type", "function")
+                            .put(
+                                "function",
+                                JSONObject().put("name", call.name).put("arguments", call.arguments)
+                            )
+                    )
+                }
+            })
+            return json
+        }
+        json.put("content", message.content)
+        message.toolCallId?.let { json.put("tool_call_id", it) }
+        return json
     }
 
     /**
@@ -349,6 +442,29 @@ class AiClient {
         val scheme = base.substringBefore("://", "").lowercase()
         if (scheme != "https" && !(scheme == "http" && config.allowCleartextHttp)) return null
         return if (base.endsWith("/chat/completions")) base else base + "/chat/completions"
+    }
+
+    /** 流式 tool_calls 的分片暂存。 */
+    private class MutableToolCall {
+        var id: String = ""
+        var name: String = ""
+        val arguments: StringBuilder = StringBuilder()
+    }
+
+    /** 非流式响应里的 tool_calls（结构完整，直接解析）。 */
+    private fun parseToolCalls(array: JSONArray?): List<ToolCall> {
+        if (array == null) return emptyList()
+        return (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            val function = item.optJSONObject("function") ?: return@mapNotNull null
+            val name = function.optString("name")
+            if (name.isBlank()) return@mapNotNull null
+            ToolCall(
+                id = item.optString("id").ifBlank { "call_" + name },
+                name = name,
+                arguments = function.optString("arguments")
+            )
+        }
     }
 
     private companion object {

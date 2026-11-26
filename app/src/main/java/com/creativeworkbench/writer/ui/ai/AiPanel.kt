@@ -41,7 +41,10 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.creativeworkbench.writer.core.ai.AiActions
+import com.creativeworkbench.writer.core.ai.AutoNotePick
 import com.creativeworkbench.writer.core.ai.BodyRange
+import com.creativeworkbench.writer.core.ai.NoteCandidate
+import com.creativeworkbench.writer.core.ai.NoteContextMode
 import com.creativeworkbench.writer.core.ai.SelectionInfo
 import com.creativeworkbench.writer.core.data.NoteEntity
 import com.creativeworkbench.writer.core.data.NoteKind
@@ -88,6 +91,8 @@ fun AiPanel(
     onToggleOutline: (Boolean) -> Unit = {},
     onToggleNotes: (Boolean) -> Unit = {},
     onToggleAllNotes: (Boolean) -> Unit = {},
+    /** 设定挑选模式：自动 / 全部 / 手动 / 关。 */
+    onNoteMode: (NoteContextMode) -> Unit = {},
     /** 「本章摘要」写入 chapter.summary（不是正文）。 */
     onWriteSummary: (String) -> Unit = {},
     /** 大纲为空时点「大纲 0」直接去大纲页（否则那个 chip 只是个没用的标签）。 */
@@ -171,11 +176,19 @@ fun AiPanel(
                         else onToggleOutline(!state.includeOutline)
                     }
                 )
-                Tag(
-                    text = if (state.includeNotes) "笔记 " + noteCount else "笔记 关",
-                    active = state.includeNotes && noteCount > 0,
-                    onClick = { onToggleNotes(!state.includeNotes) }
-                )
+            }
+
+            // 设定怎么带：默认「自动」——AI 按这一章要写的东西自己挑。
+            // 以前是「全部默认勾上、用户逐条取消」，设定一多每次都要先做一遍减法。
+            Spacer(Modifier.height(8.dp))
+            ChipLine("设定") {
+                NoteContextMode.entries.forEach { mode ->
+                    Tag(
+                        text = if (mode == NoteContextMode.Manual) mode.label + " " + noteCount else mode.label,
+                        active = state.noteMode == mode,
+                        onClick = { onNoteMode(mode) }
+                    )
+                }
             }
 
             if (action?.id != AiActions.CHECK && action?.id != AiActions.SUMMARY && state.includeBody) {
@@ -203,13 +216,29 @@ fun AiPanel(
                 }
             }
 
-            if (contextNotes.isNotEmpty()) {
+            if (state.noteMode == NoteContextMode.Auto && state.includeNotes) {
+                Spacer(Modifier.height(6.dp))
+                AutoNoteSummary(
+                    pick = state.notePick,
+                    selecting = state.noteSelecting,
+                    poolSize = contextNotes.size,
+                    excluded = excludedNoteIds,
+                    onToggle = onToggleNote
+                )
+            } else if (state.noteMode == NoteContextMode.Manual && contextNotes.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
                 ContextNotePicker(
                     notes = contextNotes,
                     excluded = excludedNoteIds,
                     onToggle = onToggleNote,
                     onToggleAll = onToggleAllNotes
+                )
+            } else if (state.noteMode == NoteContextMode.All && contextNotes.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "全部设定 " + contextNotes.size + " 条（超预算的部分会在下面「将发送」里列出）",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
@@ -556,6 +585,88 @@ private fun ChipLine(label: String, chips: @Composable () -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             chips()
+        }
+    }
+}
+
+/**
+ * 自动模式的挑选结果：选了哪几条、为什么选、多少 token。
+ * 点「调整」可以看整个候选池并临时取消某条（会话内有效，不改模式、不落盘）。
+ */
+@Composable
+private fun AutoNoteSummary(
+    pick: AutoNotePick?,
+    selecting: Boolean,
+    poolSize: Int,
+    excluded: Set<String>,
+    onToggle: (String) -> Unit
+) {
+    var open by remember { mutableStateOf(false) }
+    val chosen: List<NoteCandidate> = pick?.chosen.orEmpty()
+    val active = chosen.filter { it.note.id !in excluded }
+    Column(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = when {
+                    selecting -> "正在按这一章挑设定…"
+                    pick == null -> "选好动作后自动挑"
+                    poolSize == 0 -> "还没有可用的设定"
+                    else -> pick.message + " · 约 " + pick.usedTokens + " tokens"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            if (chosen.isNotEmpty()) {
+                Text(
+                    if (open) "收起" else "调整",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clickable { open = !open }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+        }
+        if (!open) {
+            if (active.isNotEmpty()) {
+                Text(
+                    active.joinToString("、") { it.note.title },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2
+                )
+            }
+        } else {
+            Text(
+                "点一条可以临时取消（只影响这一次，不改模式）",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 2.dp)
+            )
+            chosen.forEach { candidate ->
+                val checked = candidate.note.id !in excluded
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onToggle(candidate.note.id) }
+                        .padding(vertical = 1.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(checked = checked, onCheckedChange = { onToggle(candidate.note.id) })
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            NoteKind.label(candidate.note.kind) + " · " + candidate.note.title,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            candidate.reason,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
         }
     }
 }

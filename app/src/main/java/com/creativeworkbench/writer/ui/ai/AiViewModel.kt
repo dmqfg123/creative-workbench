@@ -21,11 +21,16 @@ import com.creativeworkbench.writer.core.ai.AiStreamHooks
 import com.creativeworkbench.writer.core.ai.AiUsage
 import com.creativeworkbench.writer.core.ai.BodyRange
 import com.creativeworkbench.writer.core.ai.ChatMessage
+import com.creativeworkbench.writer.core.ai.AutoNotePick
 import com.creativeworkbench.writer.core.ai.ContextOptions
+import com.creativeworkbench.writer.core.ai.NoteContextMode
+import com.creativeworkbench.writer.core.ai.NoteSelector
 import com.creativeworkbench.writer.core.ai.PreparedContext
 import com.creativeworkbench.writer.core.ai.SelectionInfo
 import com.creativeworkbench.writer.core.ai.SettingOverflow
+import com.creativeworkbench.writer.core.ai.ContextBudget
 import com.creativeworkbench.writer.core.data.Block
+import com.creativeworkbench.writer.core.data.NoteKind
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -67,7 +72,16 @@ data class AiUiState(
     /** 思考模式的思维链字数（只显示「正在思考…」用，不写进结果）。 */
     val thinkingChars: Int = 0,
     /** 自动重试提示（429/5xx/网络抖动时显示「第 N 次重试…」）。 */
-    val retryNotice: String = ""
+    val retryNotice: String = "",
+    /**
+     * 设定进上下文的方式。默认「自动」：AI 按这一章要写的东西自己挑，
+     * 用户不用每次先点一遍「全部取消」再勾几条。
+     */
+    val noteMode: NoteContextMode = NoteContextMode.Auto,
+    /** 自动模式的挑选结果（选了哪些、候选池多大、是不是模型挑的）。 */
+    val notePick: AutoNotePick? = null,
+    /** 正在挑设定（一次便宜调用，界面上显示「正在挑资料…」而不是干等）。 */
+    val noteSelecting: Boolean = false
 )
 
 class AiViewModel(
@@ -81,9 +95,29 @@ class AiViewModel(
     private val builder =
         AiContextBuilder(container.chapters, container.notes, container.outline, container.foreshadowing)
     private val historyStore = container.aiHistory
+    private val noteSelector = NoteSelector(client)
     private val _state = MutableStateFlow(
         AiUiState(
-            availableActions = AiActions.builtin + container.plugins.list().flatMap { it.actions }
+            availableActions = AiActions.builtin + container.plugins.list().flatMap { it.actions },
+            // 面板偏好从落盘恢复：上次选哪种模式、手动勾掉了哪些设定、字数、正文范围。
+            // 以前这些只活在内存里，面板一关就复位成「全部勾上」——用户每次都得重做一遍减法。
+            noteMode = NoteContextMode.of(
+                container.settings.aiPref(KEY_NOTE_MODE, NoteContextMode.Auto.name)
+            ),
+            excludedNoteIds = container.settings.aiPref(KEY_NOTE_EXCLUDED)
+                .split(',')
+                .filter { it.isNotBlank() }
+                .toSet(),
+            includeBody = container.settings.aiPref(KEY_INCLUDE_BODY, "true").toBoolean(),
+            includeOutline = container.settings.aiPref(KEY_INCLUDE_OUTLINE, "true").toBoolean(),
+            lengthChars = container.settings.aiPref(KEY_LENGTH, "600").toIntOrNull() ?: 600,
+            bodyRange = BodyRange.entries.firstOrNull {
+                it.name == container.settings.aiPref(KEY_BODY_RANGE, BodyRange.Whole.name)
+            } ?: BodyRange.Whole,
+            followOutline = container.settings.aiPref(KEY_FOLLOW_OUTLINE, "false").toBoolean(),
+            includeNotes = NoteContextMode.of(
+                container.settings.aiPref(KEY_NOTE_MODE, NoteContextMode.Auto.name)
+            ) != NoteContextMode.Off
         )
     )
     val state: StateFlow<AiUiState> = _state.asStateFlow()
@@ -99,7 +133,9 @@ class AiViewModel(
         includeOutline = _state.value.includeOutline,
         includeBody = _state.value.includeBody,
         bodyRange = _state.value.bodyRange,
-        followOutline = _state.value.followOutline
+        followOutline = _state.value.followOutline,
+        noteMode = _state.value.noteMode,
+        autoNoteIds = _state.value.notePick?.chosen?.map { it.note.id }.orEmpty()
     )
 
     fun prepare(
@@ -135,6 +171,15 @@ class AiViewModel(
             } else {
                 null
             }
+            // 自动模式：先让模型从候选里挑这次要用的设定。这是「AI 自主调用笔记」的落地点——
+            // 用户不用再点「全部取消」再勾几条；挑完的结果会写进 preview，看得见也可临时改。
+            if (_state.value.noteMode == NoteContextMode.Auto && _state.value.includeNotes) {
+                _state.update { it.copy(noteSelecting = true) }
+                val pick = autoPick(action, blocks)
+                _state.update { it.copy(noteSelecting = false, notePick = pick) }
+            } else {
+                _state.update { it.copy(notePick = null) }
+            }
             val prepared = runCatching {
                 builder.prepare(
                     action, config, workId, chapterId, blocks, activeBlockId, selection, allowOverflow,
@@ -154,6 +199,51 @@ class AiViewModel(
                 )
             }
         }
+    }
+
+    /**
+     * 「AI 自选设定」：把这一章相关的候选设定交给模型挑。
+     * 候选先用本地规则筛（同作品 / 设定类或勾了 AI 参考的素材 / 已生效章节），
+     * 模型只做「这次用哪几条」的判断，挑失败就退回本地打分——不会因为一次调用失败就丢设定。
+     */
+    private suspend fun autoPick(action: AiActionSpec, blocks: List<Block>): AutoNotePick {
+        val notes = runCatching { container.notes.allOnce() }.getOrDefault(emptyList())
+        val chapterList = runCatching { container.chapters.chapters(workId) }.getOrDefault(emptyList())
+        val orderOfChapter = chapterList.withIndex().associate { it.value.id to it.index }
+        val currentOrder = orderOfChapter[chapterId] ?: 0
+        val candidates = notes.filter { note ->
+            val sameWork = note.workId == workId
+            val setting = sameWork && NoteKind.setting.contains(note.kind)
+            val material = NoteKind.material.contains(note.kind) && note.aiReference &&
+                (note.workId == null || sameWork)
+            if (!setting && !material) return@filter false
+            val from = note.fromChapterId ?: return@filter true
+            val fromOrder = orderOfChapter[from] ?: return@filter true
+            currentOrder >= fromOrder
+        }
+        if (candidates.isEmpty()) return AutoNotePick.EMPTY
+        val scanText = blocks.joinToString("\n") { it.text }
+        val nodes = runCatching { container.outline.list(workId) }.getOrDefault(emptyList())
+        val outlineText = nodes
+            .filter { it.chapterId == null || it.chapterId == chapterId }
+            .joinToString("\n") { node ->
+                "· " + node.title + if (node.content.isNotBlank()) "：" + node.content else ""
+            }
+            .take(2000)
+        val config = configStore.config()
+        val cap = ContextBudget.from(config.profile).settingCap.coerceAtLeast(512)
+        return runCatching {
+            noteSelector.select(
+                actionId = action.id,
+                actionName = action.name,
+                notes = candidates,
+                scanText = scanText,
+                outlineText = outlineText,
+                cap = cap,
+                config = config,
+                apiKey = configStore.apiKey()
+            )
+        }.getOrElse { noteSelector.localOnly(candidates, scanText, outlineText, cap) }
     }
 
     /**
@@ -371,26 +461,61 @@ class AiViewModel(
     /** 面板里改字数：只影响下一次装配的提示词与输出上限。 */
     fun setLength(chars: Int) {
         _state.value = _state.value.copy(lengthChars = chars)
+        container.settings.rememberAiPref(KEY_LENGTH, chars.toString())
     }
 
     fun setBodyRange(range: BodyRange) {
         _state.value = _state.value.copy(bodyRange = range)
+        container.settings.rememberAiPref(KEY_BODY_RANGE, range.name)
     }
 
     fun setIncludeBody(value: Boolean) {
         _state.value = _state.value.copy(includeBody = value)
+        container.settings.rememberAiPref(KEY_INCLUDE_BODY, value.toString())
     }
 
     fun setIncludeOutline(value: Boolean) {
         _state.value = _state.value.copy(includeOutline = value)
+        container.settings.rememberAiPref(KEY_INCLUDE_OUTLINE, value.toString())
     }
 
     fun setFollowOutline(value: Boolean) {
         _state.value = _state.value.copy(followOutline = value)
+        container.settings.rememberAiPref(KEY_FOLLOW_OUTLINE, value.toString())
     }
 
+    /**
+     * 设定挑选模式：自动 / 全部 / 手动 / 关。
+     * 选了就落盘——面板关掉、换章、重启 App 都保持，这是用户明确要的「保持选择状态」。
+     */
+    fun setNoteMode(mode: NoteContextMode) {
+        _state.value = _state.value.copy(
+            noteMode = mode,
+            includeNotes = mode != NoteContextMode.Off,
+            notePick = if (mode == NoteContextMode.Auto) _state.value.notePick else null
+        )
+        container.settings.rememberAiPref(KEY_NOTE_MODE, mode.name)
+        if (mode == NoteContextMode.Manual) persistManualExclusions()
+    }
+
+    /** 兼容旧调用：勾「笔记」= 回到之前的模式（关过就默认自动），取消 = 关。 */
     fun setIncludeNotes(value: Boolean) {
-        _state.value = _state.value.copy(includeNotes = value)
+        if (!value) {
+            setNoteMode(NoteContextMode.Off)
+        } else if (_state.value.noteMode == NoteContextMode.Off) {
+            setNoteMode(NoteContextMode.Auto)
+        } else {
+            _state.value = _state.value.copy(includeNotes = true)
+        }
+    }
+
+    /** 手动勾掉的设定写盘；只在「手动」模式下记，自动模式里的临时取消不该带到下次。 */
+    private fun persistManualExclusions() {
+        if (_state.value.noteMode != NoteContextMode.Manual) return
+        container.settings.rememberAiPref(
+            KEY_NOTE_EXCLUDED,
+            _state.value.excludedNoteIds.joinToString(",")
+        )
     }
 
     /** 用户在结果区直接改字，写回 state 再写入正文。 */
@@ -402,6 +527,7 @@ class AiViewModel(
         val excluded = _state.value.excludedNoteIds.toMutableSet()
         if (!excluded.add(noteId)) excluded.remove(noteId)
         _state.value = _state.value.copy(excludedNoteIds = excluded)
+        persistManualExclusions()
     }
 
     /** 全选 / 全不选引用笔记（笔记多了逐条点太蠢）。 */
@@ -409,6 +535,7 @@ class AiViewModel(
         val set = _state.value.excludedNoteIds.toMutableSet()
         if (excluded) set.addAll(noteIds) else set.removeAll(noteIds.toSet())
         _state.value = _state.value.copy(excludedNoteIds = set)
+        persistManualExclusions()
     }
 
     fun cancel() {
@@ -419,13 +546,33 @@ class AiViewModel(
     fun reset() {
         job?.cancel()
         prepareJob?.cancel()
-        // availableActions 不能跟着复位：导入包的动作会从动作栏里消失，直到重建 ViewModel
-        _state.value = AiUiState(availableActions = _state.value.availableActions)
+        // 只清「这一次生成」的东西；面板偏好（模式/勾选/来源/字数/范围）跟着人走，
+        // 否则每次打开面板都要重新设一遍——这正是用户抱怨的那个问题的另一面。
+        val current = _state.value
+        _state.value = AiUiState(
+            // availableActions 不能跟着复位：导入包的动作会从动作栏里消失，直到重建 ViewModel
+            availableActions = current.availableActions,
+            noteMode = current.noteMode,
+            excludedNoteIds = current.excludedNoteIds,
+            includeBody = current.includeBody,
+            includeOutline = current.includeOutline,
+            includeNotes = current.includeNotes,
+            lengthChars = current.lengthChars,
+            bodyRange = current.bodyRange,
+            followOutline = current.followOutline
+        )
     }
 
     fun store(): AiHistoryStore = historyStore
 
     private companion object {
+        const val KEY_NOTE_MODE = "note_mode"
+        const val KEY_NOTE_EXCLUDED = "note_excluded"
+        const val KEY_INCLUDE_BODY = "include_body"
+        const val KEY_INCLUDE_OUTLINE = "include_outline"
+        const val KEY_LENGTH = "length_chars"
+        const val KEY_BODY_RANGE = "body_range"
+        const val KEY_FOLLOW_OUTLINE = "follow_outline"
         const val MAX_CONTINUE_ROUNDS = 3
         const val CONTINUE_INSTRUCTION =
             "接着上面最后一句继续往下写，不要重复已写过的句子，不要重新开头，不要解释。只输出新增的正文。"

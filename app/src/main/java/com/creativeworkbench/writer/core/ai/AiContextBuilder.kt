@@ -58,7 +58,14 @@ data class ContextOptions(
     val includeBody: Boolean = true,
     val bodyRange: BodyRange = BodyRange.Whole,
     /** 「按大纲推进」：把本章边界与目标字数写成硬约束（默认关，开了才发）。 */
-    val followOutline: Boolean = false
+    val followOutline: Boolean = false,
+    /**
+     * 设定怎么进上下文：自动（AI 按剧情挑）/ 全部 / 手动 / 关。
+     * 默认值保持 Manual 是为了不改变既有调用方的行为；界面默认走 Auto。
+     */
+    val noteMode: NoteContextMode = NoteContextMode.Manual,
+    /** Auto 模式下挑中的条目 id，顺序即轻重（注入时按这个顺序装，不再重排）。 */
+    val autoNoteIds: List<String> = emptyList()
 )
 
 /**
@@ -96,7 +103,22 @@ class AiContextBuilder(
         val notes = mutableListOf<String>()
         // 「检查」必须看到正文，否则什么也检查不了：勾掉正文对它无效
         val withBody = options.includeBody || action.id == AiActions.CHECK
-        val withNotes = options.includeNoteSources
+        val withNotes = options.includeNoteSources && options.noteMode != NoteContextMode.Off
+        val autoOrder = if (options.noteMode == NoteContextMode.Auto) options.autoNoteIds else emptyList()
+        val autoIds = autoOrder.toSet()
+        val autoIndex = autoOrder.withIndex().associate { it.value to it.index }
+        /**
+         * 四种模式的准入规则（唯一的判定点，正文和素材共用）：
+         * - 关：一条都不带；
+         * - 自动：只带挑中的（挑中清单本身已经做过 chapter/kind 过滤）；
+         * - 全部 / 手动：带全部，减去用户手动取消的。
+         * 自动模式下仍然允许用户临时取消某条——那是覆盖，不是把整份清单丢掉。
+         */
+        fun admits(note: NoteEntity): Boolean = when (options.noteMode) {
+            NoteContextMode.Off -> false
+            NoteContextMode.Auto -> note.id in autoIds && note.id !in options.excludedNoteIds
+            NoteContextMode.All, NoteContextMode.Manual -> note.id !in options.excludedNoteIds
+        }
 
         // 设定生效章节（抄 Novelcrafter 的 Codex Progressions）：
         // 写在第三章才成立的设定，不该在第一章的上下文里出现，否则模型会提前埋错伏笔。
@@ -121,13 +143,25 @@ class AiContextBuilder(
         val settingNotes = if (withNotes) {
             allNotes.filter {
                 it.workId == workId && NoteKind.setting.contains(it.kind) &&
-                    it.id !in options.excludedNoteIds && activeInThisChapter(it)
+                    admits(it) && activeInThisChapter(it)
+            }.let { list ->
+                // 自动模式按 AI/本地的挑选顺序装；其它模式交给 SettingInjector 按命中重排（稳定序）。
+                if (options.noteMode == NoteContextMode.Auto) {
+                    list.sortedBy { autoIndex[it.id] ?: Int.MAX_VALUE }
+                } else {
+                    list
+                }
             }
         } else {
             emptyList()
         }
         val scanText = blocks.joinToString("\n") { it.text } + "\n" + prevTail
-        val injection = SettingInjector.inject(settingNotes, scanText, settingCap)
+        val injection = SettingInjector.inject(
+            settingNotes,
+            scanText,
+            settingCap,
+            preserveOrder = options.noteMode == NoteContextMode.Auto
+        )
         val settingText = injection.keptText
         if (injection.omitted.isNotEmpty() && !allowSettingOverflow && withNotes) {
             val omittedTitles = injection.omitted.map { it.note.title }.take(6).joinToString("、")
@@ -149,8 +183,14 @@ class AiContextBuilder(
             allNotes.filter {
                 (it.workId == null || it.workId == workId) &&
                     NoteKind.material.contains(it.kind) && it.aiReference &&
-                    it.id !in options.excludedNoteIds && activeInThisChapter(it)
-            }.sortedBy { it.id }
+                    admits(it) && activeInThisChapter(it)
+            }.let { list ->
+                if (options.noteMode == NoteContextMode.Auto) {
+                    list.sortedBy { autoIndex[it.id] ?: Int.MAX_VALUE }
+                } else {
+                    list.sortedBy { it.id }
+                }
+            }
         } else {
             emptyList()
         }
@@ -249,6 +289,9 @@ class AiContextBuilder(
             notes.add("未带正文")
         } else if (options.bodyRange.radius != null && action.id != AiActions.CHECK) {
             notes.add("正文" + options.bodyRange.shortLabel)
+        }
+        if (options.noteMode == NoteContextMode.Auto) {
+            notes.add("设定 " + injection.kept.size + " 条（自动挑选）")
         }
         if (injection.omitted.isNotEmpty()) {
             notes.add("设定 " + injection.kept.size + "/" + settingNotes.size + " 条（省 " + injection.omitted.size + "）")

@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.creativeworkbench.writer.core.data.NoteEntity
 import com.creativeworkbench.writer.core.data.NoteKind
+import com.creativeworkbench.writer.ui.textimport.TextImportSheet
 import com.creativeworkbench.writer.core.data.WorkEntity
 import com.creativeworkbench.writer.ui.components.ActionSheet
 import com.creativeworkbench.writer.ui.components.SheetAction
@@ -96,6 +97,7 @@ fun NotesScreen(
     var selectMode by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var importOpen by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     LaunchedEffect(pendingFilter) {
@@ -172,6 +174,8 @@ fun NotesScreen(
                             tint = MaterialTheme.colorScheme.onSurface,
                             onClick = { selectMode = true }
                         )
+                        // 导入文本：识别成人物/设定/大纲/伏笔，勾选后才落库
+                        TextButton(onClick = { importOpen = true }) { Text("导入") }
                         IconAction(
                             icon = Icons.Default.Search,
                             contentDescription = "搜索笔记",
@@ -316,6 +320,13 @@ fun NotesScreen(
                 text = { Text("新建笔记", fontWeight = FontWeight.Medium) }
             )
         }
+    }
+
+    if (importOpen) {
+        TextImportSheet(
+            workId = activeWork?.id ?: currentWorkId,
+            onDismiss = { importOpen = false }
+        )
     }
 
     if (confirmDelete) {

@@ -746,6 +746,10 @@ fun EditorScreen(
                 aiViewModel.setIncludeNotes(on)
                 reprepareAi()
             },
+            onNoteMode = { mode ->
+                aiViewModel.setNoteMode(mode)
+                reprepareAi()
+            },
             onToggleFollowOutline = { on ->
                 aiViewModel.setFollowOutline(on)
                 reprepareAi()

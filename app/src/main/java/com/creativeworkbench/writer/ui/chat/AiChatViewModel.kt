@@ -12,6 +12,9 @@ import com.creativeworkbench.writer.core.ai.AiClient
 import com.creativeworkbench.writer.core.ai.AiStreamHooks
 import com.creativeworkbench.writer.core.ai.AiUsage
 import com.creativeworkbench.writer.core.ai.ChatMessage
+import com.creativeworkbench.writer.core.ai.ProjectTools
+import com.creativeworkbench.writer.core.ai.ToolOutcome
+import com.creativeworkbench.writer.core.ai.ToolProposal
 import com.creativeworkbench.writer.core.ai.WebSearchClient
 import com.creativeworkbench.writer.core.ai.WebSearchHit
 import com.creativeworkbench.writer.core.ai.WebSearchOutcome
@@ -25,18 +28,28 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
 
+/** 一条工具执行记录（给对话气泡显示「查了什么、改了什么」）。 */
+data class ToolRun(
+    val name: String,
+    val label: String,
+    val summary: String,
+    val ok: Boolean
+)
+
 data class ChatTurn(
     val id: String,
     val role: String,
     val text: String,
     val hits: List<WebSearchHit> = emptyList(),
-    val streaming: Boolean = false
+    val streaming: Boolean = false,
+    val toolRuns: List<ToolRun> = emptyList()
 )
 
 data class AiChatUiState(
     val turns: List<ChatTurn> = emptyList(),
     val sending: Boolean = false,
     val error: String? = null,
+    val notice: String = "",
     /** 联网检索开关。 */
     val webEnabled: Boolean = false,
     /** 对话时是否带上当前作品的大纲 / 笔记。默认关：不加任何东西，勾了才带。 */
@@ -46,14 +59,19 @@ data class AiChatUiState(
     /** 自动重试提示（429/5xx/网络抖动）。 */
     val retryNotice: String = "",
     val usage: AiUsage? = null,
-    val configured: Boolean = true
+    val configured: Boolean = true,
+    /** 允许 AI 读写项目数据（工具调用）。没选作品时不可用。 */
+    val toolsEnabled: Boolean = true,
+    /** 待用户确认的写入提案。 */
+    val proposals: List<ToolProposal> = emptyList()
 )
 
 /**
- * 专门的 AI 对话窗口：多轮聊天 + 可选联网检索 + 结论一键存成笔记。
+ * AI 对话窗口：多轮聊天 + 可选联网检索 + **直接读写项目**。
  *
- * 和编辑器里的「续写/改写」分开：那边是一次性动作、写完就进正文；
- * 这里是「问清楚再写」，结论落到笔记板块，不直接改正文。
+ * 0.18 起不只是「讨论」：模型可以通过工具查章节、搜设定、读大纲，
+ * 并把讨论结果写成提案（新建笔记 / 加大纲节点 / 追加正文 / 登记伏笔），
+ * 提案要用户点「应用」才落库——模型不能绕过用户改正文。
  */
 class AiChatViewModel(
     application: Application,
@@ -63,6 +81,14 @@ class AiChatViewModel(
     private val configStore = container.aiConfig
     private val client = AiClient()
     private val searchClient = WebSearchClient()
+    private val projectTools = ProjectTools(
+        chapters = container.chapters,
+        notes = container.notes,
+        outline = container.outline,
+        foreshadowing = container.foreshadowing,
+        workId = workId,
+        currentChapterId = null
+    )
     private val _state = MutableStateFlow(AiChatUiState())
     val state: StateFlow<AiChatUiState> = _state.asStateFlow()
     private var job: Job? = null
@@ -77,9 +103,11 @@ class AiChatViewModel(
 
     fun setIncludeNotes(enabled: Boolean) = _state.update { it.copy(includeNotes = enabled) }
 
+    fun setToolsEnabled(enabled: Boolean) = _state.update { it.copy(toolsEnabled = enabled) }
+
     fun clear() {
         job?.cancel()
-        _state.update { it.copy(turns = emptyList(), sending = false, error = null) }
+        _state.update { it.copy(turns = emptyList(), sending = false, error = null, proposals = emptyList()) }
     }
 
     fun send(text: String) {
@@ -96,7 +124,9 @@ class AiChatViewModel(
                 turns = it.turns + userTurn + assistantTurn,
                 sending = true,
                 error = null,
-                lastSearchLabel = ""
+                notice = "",
+                lastSearchLabel = "",
+                retryNotice = ""
             )
         }
         job?.cancel()
@@ -142,8 +172,13 @@ class AiChatViewModel(
             // 之前那版「你是小说写作助手，只处理情节人物设定」会让它把「查神话」「查民俗」当成无关问题拒掉，
             // 也会把幻想题材的回答往「现实主义小说」上带。这里只在用户勾了资料时附一段中立数据，
             // 没勾就一条 system 都不发——就是原原本本的模型。
+            // 工具开着就先给一份「项目速览」（章节/大纲/笔记数），
+            // 模型不用为了知道有哪几章先花两轮去查——实测省 2-4 次工具调用。
+            val useTools = _state.value.toolsEnabled && workId != null
             val context = buildContext()
-            val system = if (context.isBlank()) "" else "以下是提问者随本次提问附上的资料，仅在相关时参考：\n" + context
+            val snapshot = if (useTools) projectSnapshot() else ""
+            val merged = listOf(context, snapshot).filter { it.isNotBlank() }.joinToString("\n")
+            val system = if (merged.isBlank()) "" else "以下是提问者随本次提问附上的资料，仅在相关时参考：\n" + merged
             val history = _state.value.turns
                 .filter { !it.streaming }
                 .dropLast(1)
@@ -162,51 +197,146 @@ class AiChatViewModel(
             messages.addAll(history)
             messages.add(ChatMessage("user", payload))
 
-            val tuned = ActionTuning(maxTokens = if (config.deepThinking) 4096 else 3072)
-            val builder = StringBuilder()
-            var lastEmit = 0L
-            val result = client.chat(
-                config = config,
-                apiKey = apiKey,
-                messages = messages,
-                tuning = tuned,
-                hooks = AiStreamHooks(
-                    onDelta = { delta ->
-                        builder.append(delta)
-                        val now = android.os.SystemClock.elapsedRealtime()
-                        if (now - lastEmit > 80) {
-                            lastEmit = now
-                            updateAssistant(assistantTurn.id, builder.toString(), false)
-                        }
-                    },
-                    onRetry = { attempt, waitMs, reason ->
-                        _state.update {
-                            it.copy(
-                                retryNotice = "第 " + attempt + " 次重试（" + reason + "），等 " +
-                                    (waitMs / 1000.0).let { s -> String.format(java.util.Locale.US, "%.1f", s) } + " 秒"
-                            )
-                        }
-                    }
-                ),
-                webSearch = serverSearch
+            // 工具：只有选了作品才有意义（读不到项目数据时给工具反而让它乱试）。
+            val specs = if (useTools) projectTools.specs() else null
+            val tuned = ActionTuning(
+                maxTokens = if (config.deepThinking) 4096 else 3072,
+                // DeepSeek 的思考模式与工具调用会抢额度，工具场景下关掉思考更稳。
+                thinking = if (useTools) false else null
             )
-            when (result) {
-                is AiCallResult.Error -> {
-                    _state.update { it.copy(sending = false, error = result.message) }
-                    updateAssistant(assistantTurn.id, builder.toString().ifBlank { "（生成失败）" }, false)
-                }
-                is AiCallResult.Ok -> {
-                    updateAssistant(assistantTurn.id, com.creativeworkbench.writer.core.ai.PlainText.of(result.content), false, hits)
-                    _state.update {
-                        it.copy(
-                            sending = false,
-                            retryNotice = "",
-                            usage = (it.usage ?: AiUsage()) + result.usage
-                        )
+
+            val builder = StringBuilder()
+            val allRuns = mutableListOf<ToolRun>()
+            var lastEmit = 0L
+            var round = 0
+            var failure: String? = null
+            var finished = false
+
+            while (round < MAX_TOOL_ROUNDS && !finished) {
+                round++
+                val roundStart = builder.length
+                val result = client.chat(
+                    config = config,
+                    apiKey = apiKey,
+                    messages = messages,
+                    tuning = tuned,
+                    hooks = AiStreamHooks(
+                        onDelta = { delta ->
+                            builder.append(delta)
+                            val now = android.os.SystemClock.elapsedRealtime()
+                            if (now - lastEmit > 80) {
+                                lastEmit = now
+                                updateAssistant(assistantTurn.id, builder.toString(), false)
+                            }
+                        },
+                        onRetry = { attempt, waitMs, reason ->
+                            _state.update {
+                                it.copy(
+                                    retryNotice = "第 " + attempt + " 次重试（" + reason + "），等 " +
+                                        (waitMs / 1000.0).let { s ->
+                                            String.format(java.util.Locale.US, "%.1f", s)
+                                        } + " 秒"
+                                )
+                            }
+                        }
+                    ),
+                    webSearch = serverSearch,
+                    tools = specs
+                )
+                when (result) {
+                    is AiCallResult.Error -> {
+                        failure = result.message
+                        finished = true
+                    }
+                    is AiCallResult.Ok -> {
+                        // 流式增量已经在 onDelta 里拼进 builder 了。
+                        // 只有「这一轮没吐过字」或「流比最终内容短」时才补差，否则整段会重复一遍。
+                        val streamed = builder.length - roundStart
+                        if (result.content.length > streamed) {
+                            builder.append(result.content.substring(streamed))
+                        }
+                        _state.update { it.copy(usage = (it.usage ?: AiUsage()) + result.usage) }
+                        updateAssistant(assistantTurn.id, builder.toString(), false)
+                        if (result.toolCalls.isEmpty()) {
+                            finished = true
+                        } else {
+                            // 把「我要调用什么」原样交还给模型，否则下一轮它会重复调同一个工具
+                            messages.add(ChatMessage("assistant", result.content, result.toolCalls))
+                            result.toolCalls.take(MAX_CALLS_PER_ROUND).forEach { call ->
+                                when (val outcome = projectTools.run(call)) {
+                                    is ToolOutcome.Data -> {
+                                        allRuns.add(
+                                            ToolRun(call.name, readableToolName(call.name), outcome.text.take(100), true)
+                                        )
+                                        messages.add(
+                                            ChatMessage("tool", outcome.text, toolCallId = call.id)
+                                        )
+                                    }
+                                    is ToolOutcome.Proposal -> {
+                                        allRuns.add(
+                                            ToolRun(
+                                                call.name,
+                                                outcome.proposal.label,
+                                                "待确认：" + outcome.proposal.title,
+                                                true
+                                            )
+                                        )
+                                        _state.update { it.copy(proposals = it.proposals + outcome.proposal) }
+                                        messages.add(
+                                            ChatMessage(
+                                                "tool",
+                                                "已生成待用户确认的写入提案（" + outcome.proposal.target + "：" +
+                                                    outcome.proposal.title + "）。**现在还没有写入**：" +
+                                                    "用户在界面上点「应用」后才会真正落库。" +
+                                                    "所以不要对用户说「已保存」「已完成」，只能说「准备好了，点应用就会写入」；" +
+                                                    "也不要重复提交同一个操作。",
+                                                toolCallId = call.id
+                                            )
+                                        )
+                                    }
+                                    is ToolOutcome.Failure -> {
+                                        allRuns.add(
+                                            ToolRun(call.name, readableToolName(call.name), outcome.message, false)
+                                        )
+                                        messages.add(
+                                            ChatMessage("tool", "失败：" + outcome.message, toolCallId = call.id)
+                                        )
+                                    }
+                                }
+                            }
+                            updateAssistantRuns(assistantTurn.id, allRuns)
+                        }
                     }
                 }
             }
+            updateAssistant(
+                assistantTurn.id,
+                com.creativeworkbench.writer.core.ai.PlainText.of(builder.toString()),
+                false,
+                hits
+            )
+            updateAssistantRuns(assistantTurn.id, allRuns)
+            _state.update {
+                it.copy(
+                    sending = false,
+                    retryNotice = "",
+                    error = failure,
+                    // 工具轮次用完还没收敛时给个明确提示，别让人以为它写完了
+                    notice = if (!finished) "工具调用轮次用完了，回答可能没说完，再发一句「继续」。" else it.notice
+                )
+            }
         }
+    }
+
+    /** 工具名 → 界面上好读的中文。 */
+    private fun readableToolName(name: String): String = when (name) {
+        "list_chapters" -> "查看章节"
+        "read_chapter" -> "读正文"
+        "search_notes" -> "搜笔记"
+        "read_note" -> "读笔记"
+        "list_outline" -> "看大纲"
+        "list_foreshadowing" -> "看伏笔"
+        else -> name
     }
 
     private fun updateAssistant(id: String, text: String, streaming: Boolean, hits: List<WebSearchHit>? = null) {
@@ -216,6 +346,78 @@ class AiChatViewModel(
                     if (turn.id != id) turn
                     else turn.copy(text = text, streaming = streaming, hits = hits ?: turn.hits)
                 }
+            )
+        }
+    }
+
+    private fun updateAssistantRuns(id: String, runs: List<ToolRun>) {
+        _state.update { state ->
+            state.copy(
+                turns = state.turns.map { turn ->
+                    if (turn.id != id) turn else turn.copy(toolRuns = runs.toList())
+                }
+            )
+        }
+    }
+
+    /** 应用一条写入提案（用户点「应用」才到这一步）。 */
+    fun applyProposal(id: String) {
+        val proposal = _state.value.proposals.firstOrNull { it.id == id } ?: return
+        if (proposal.applied) return
+        viewModelScope.launch {
+            runCatching { projectTools.apply(proposal) }
+                .onSuccess { message ->
+                    _state.update { state ->
+                        state.copy(
+                            notice = message,
+                            error = null,
+                            proposals = state.proposals.map {
+                                if (it.id == id) it.copy(applied = true, applyError = null) else it
+                            }
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _state.update { state ->
+                        state.copy(
+                            proposals = state.proposals.map {
+                                if (it.id == id) it.copy(applyError = error.message ?: "写入失败") else it
+                            }
+                        )
+                    }
+                }
+        }
+    }
+
+    fun dismissProposal(id: String) {
+        _state.update { state -> state.copy(proposals = state.proposals.filterNot { it.id == id }) }
+    }
+
+    /** 一键应用全部（用户确实想批量落库时）。 */
+    fun applyAllProposals() {
+        _state.value.proposals.filterNot { it.applied }.forEach { applyProposal(it.id) }
+    }
+
+    /** 项目速览：章节清单（带字数/有无摘要）+ 大纲与笔记规模。只读、量小，给模型一个「地图」。 */
+    private suspend fun projectSnapshot(): String {
+        val id = workId ?: return ""
+        val chapters = runCatching { container.chapters.chapters(id) }.getOrDefault(emptyList())
+        val nodes = runCatching { container.outline.list(id) }.getOrDefault(emptyList())
+        val notes = runCatching { container.notes.allOnce() }.getOrDefault(emptyList())
+            .filter { it.workId == null || it.workId == id }
+        if (chapters.isEmpty()) return ""
+        return buildString {
+            appendLine("【项目速览】")
+            appendLine(
+                "章节（" + chapters.size + "）：" + chapters.take(40).mapIndexed { index, chapter ->
+                    (index + 1).toString() + "." + chapter.title + "（" + chapter.wordCount + " 字" +
+                        (if (chapter.summary.isNullOrBlank()) "" else "·有摘要") + "）"
+                }.joinToString("；")
+            )
+            appendLine(
+                "大纲 " + nodes.size + " 条 · 笔记 " + notes.size + " 条（人物 " +
+                    notes.count { it.kind == NoteKind.CHARACTER } + "、设定 " +
+                    notes.count { it.kind == NoteKind.WORLD } + "）"
             )
         }
     }
@@ -280,11 +482,18 @@ class AiChatViewModel(
                         updatedAtMs = now
                     )
                 )
-                _state.update { it.copy(error = null) }
+                _state.update { it.copy(error = null, notice = "已存成笔记") }
             }.onFailure { error ->
                 _state.update { it.copy(error = "存笔记失败：" + (error.message ?: "存储错误")) }
             }
         }
+    }
+
+    private companion object {
+        /** 最多几个「模型要工具 → 平台执行 → 模型接着说」的来回。 */
+        const val MAX_TOOL_ROUNDS = 6
+        /** 一轮里最多执行多少个工具调用（防止模型一口气列 20 个把 UI 撑爆、把额度烧完）。 */
+        const val MAX_CALLS_PER_ROUND = 6
     }
 }
 

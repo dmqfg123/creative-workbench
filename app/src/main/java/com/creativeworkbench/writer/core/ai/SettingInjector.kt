@@ -39,7 +39,16 @@ data class InjectionResult(
  */
 object SettingInjector {
 
-    fun inject(notes: List<NoteEntity>, scanText: String, cap: Int): InjectionResult {
+    /**
+     * @param preserveOrder true = 按传入顺序装（调用方已经定好顺序，比如 AI 自选的结果），
+     *   不再按命中重排。模型给的顺序本身表达了轻重，重排会把它丢掉。
+     */
+    fun inject(
+        notes: List<NoteEntity>,
+        scanText: String,
+        cap: Int,
+        preserveOrder: Boolean = false
+    ): InjectionResult {
         if (notes.isEmpty()) return InjectionResult(emptyList(), emptyList(), 0, cap)
         val scored = notes.map { note ->
             val text = render(note)
@@ -51,29 +60,41 @@ object SettingInjector {
                 pinned = note.pinned
             )
         }
-        val sorted = scored.sortedWith(
-            compareByDescending<SettingHit> { it.hits > 0 }
-                .thenByDescending { it.hits }
-                .thenByDescending { it.pinned }
-                .thenBy { it.note.id }
-        )
+        val sorted = if (preserveOrder) {
+            scored
+        } else {
+            scored.sortedWith(
+                compareByDescending<SettingHit> { it.hits > 0 }
+                    .thenByDescending { it.hits }
+                    .thenByDescending { it.pinned }
+                    .thenBy { it.note.id }
+            )
+        }
         val kept = mutableListOf<SettingHit>()
         val omitted = mutableListOf<SettingHit>()
         var used = 0
         var overflowed = false
-        sorted.forEach { hit ->
-            when {
-                used + hit.tokens <= cap -> {
-                    kept.add(hit)
-                    used += hit.tokens
-                }
+        // 置顶条目 = SillyTavern 的 constant（常驻）：先装、且不参与预算淘汰。
+        // 以前置顶只影响排序，预算满了一样被砍——用户把一条设为「置顶」，结果它没进上下文。
+        // 常驻条目通常就几条，硬留的代价可控；真的太多时由调用方在预览里看到「设定超预算」。
+        val (always, rest) = if (preserveOrder) listOf<SettingHit>() to sorted else sorted.partition { it.pinned }
+        always.forEach { hit ->
+            kept.add(hit)
+            used += hit.tokens
+            if (used > cap) overflowed = true
+        }
+        rest.forEach { hit ->
+            // 溢出用「跳过这一条」而不是「停止装载」：后面可能有更短的条目还装得下。
+            if (used + hit.tokens <= cap) {
+                kept.add(hit)
+                used += hit.tokens
+            } else if (hit.hits > 0 && kept.isEmpty()) {
                 // 命中的条目即使单条超预算也要留住，否则「出场即注入」形同虚设
-                hit.hits > 0 && kept.isEmpty() -> {
-                    kept.add(hit)
-                    used += hit.tokens
-                    overflowed = true
-                }
-                else -> omitted.add(hit)
+                kept.add(hit)
+                used += hit.tokens
+                overflowed = true
+            } else {
+                omitted.add(hit)
             }
         }
         return InjectionResult(kept, omitted, used, cap, overflowed)
