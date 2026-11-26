@@ -209,6 +209,11 @@ class AiClient {
         val content = message?.optString("content").orEmpty()
         val finish = choice?.optString("finish_reason")?.takeIf { it.isNotEmpty() }
         val toolCalls = parseToolCalls(message?.optJSONArray("tool_calls"))
+        // 服务端安全审核拦下：finish_reason=content_filter，content 为空，且**不会说明原因**
+        // （见 https://api-docs.deepseek.com/zh-cn/guides/safety）。这不是本 App 的规则，重试也过不去。
+        if (finish == "content_filter" || message?.optString("refusal").orEmpty().isNotBlank()) {
+            return Attempt.Fail(CONTENT_FILTER_MESSAGE, false, null)
+        }
         if (content.isBlank() && toolCalls.isEmpty()) {
             return if (finish == "length") {
                 Attempt.Fail("输出被截断：这次思考把额度用完了。重试一次，或先关掉「深度思考」。", false, null)
@@ -235,6 +240,7 @@ class AiClient {
         var usage: AiUsage? = null
         // 流式下 tool_calls 是分片到达的：id/name 可能只在第一片，arguments 一片一片拼。
         val toolAccumulator = LinkedHashMap<Int, MutableToolCall>()
+        var refusalSeen = false
         while (true) {
             val line = source.readUtf8Line() ?: break
             if (line.isBlank() || line.startsWith(":")) continue // 心跳注释
@@ -269,6 +275,7 @@ class AiClient {
                     }
                 }
             }
+            if (delta.optString("refusal").orEmpty().isNotBlank()) refusalSeen = true
             val text = delta.optString("content")
             if (text.isNotEmpty()) {
                 builder.append(text)
@@ -277,6 +284,9 @@ class AiClient {
             }
         }
         val content = builder.toString()
+        if (finish == "content_filter" || refusalSeen) {
+            return Attempt.Fail(CONTENT_FILTER_MESSAGE, false, null)
+        }
         val toolCalls = toolAccumulator.values
             .filter { it.name.isNotBlank() }
             .map { ToolCall(id = it.id.ifBlank { "call_" + it.name }, name = it.name, arguments = it.arguments.toString()) }
@@ -470,5 +480,14 @@ class AiClient {
     private companion object {
         /** DSH 的 DEFAULT_STREAM_IDLE_TIMEOUT_MS：5 分钟没收到字节才算卡死。 */
         const val IDLE_TIMEOUT_SECONDS = 300L
+
+        /**
+         * DeepSeek 侧安全审核拦下时的说明。
+         * 官方文档：拒答用 finish_reason=content_filter 表示，且**不说明具体原因**；
+         * 本 App 也从不发送 safety_check=high（默认就是 low），所以这不是本项目加的限制。
+         */
+        const val CONTENT_FILTER_MESSAGE =
+            "DeepSeek 服务端的内容审核拦下了这次生成（它自己的安全策略，不是本 App 的规则，代码里也没有平台限制）。" +
+                "换个说法或删掉最敏感的那段再试，或换成 deepseek-v4-pro。"
     }
 }

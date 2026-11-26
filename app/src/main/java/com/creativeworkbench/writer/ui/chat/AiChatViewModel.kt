@@ -178,12 +178,16 @@ class AiChatViewModel(
             val context = buildContext()
             val snapshot = if (useTools) projectSnapshot() else ""
             val merged = listOf(context, snapshot).filter { it.isNotBlank() }.joinToString("\n")
-            // 无论有没有资料都带「本机私用」声明：模型偶尔拿平台规范拒写，
-            // 但这个 App 没有平台、没有发布渠道，输出只给作者本人。
+            // 默认不加任何附加指令（让模型完全按作者意愿发挥）；
+            // 只有当作者在设置里打开「本机私用声明」时才附上。
+            val withPrivateNote = container.settings
+                .aiPref("private_use_note", "false").toBoolean()
             val system = buildString {
-                append(com.creativeworkbench.writer.core.ai.AiActions.PRIVATE_USE_NOTE)
+                if (withPrivateNote) {
+                    append(com.creativeworkbench.writer.core.ai.AiActions.PRIVATE_USE_NOTE)
+                }
                 if (merged.isNotBlank()) {
-                    append('\n')
+                    if (isNotEmpty()) append('\n')
                     append("以下是提问者随本次提问附上的资料，仅在相关时参考：")
                     append('\n')
                     append(merged)

@@ -65,7 +65,9 @@ data class ContextOptions(
      */
     val noteMode: NoteContextMode = NoteContextMode.Manual,
     /** Auto 模式下挑中的条目 id，顺序即轻重（注入时按这个顺序装，不再重排）。 */
-    val autoNoteIds: List<String> = emptyList()
+    val autoNoteIds: List<String> = emptyList(),
+    /** 是否在 system 前加「本机私用」声明（设置项，默认关：让模型保持完全自由）。 */
+    val privateUseNote: Boolean = false
 )
 
 /**
@@ -399,7 +401,8 @@ class AiContextBuilder(
         }
 
         return PreparedContext(
-            system = AiActions.systemPrompt(action),
+            system = (if (options.privateUseNote) AiActions.PRIVATE_USE_NOTE + "\n" else "") +
+                AiActions.systemPrompt(action),
             user = user,
             preview = ContextPreview(
                 summary = summaryLine,

@@ -70,6 +70,11 @@ fun AiSettingsScreen(onBack: () -> Unit) {
     var searchKey by remember { mutableStateOf("") }
     var customSearchUrl by remember { mutableStateOf(store.customSearchUrl()) }
     var searchStatus by remember { mutableStateOf<String?>(null) }
+    // 默认关：常规生成一条附加指令都不加，让模型完全按作者意愿写
+    // （见 参考/内容拒写与提示词_20261126.md）。
+    var privateNote by remember {
+        mutableStateOf(app.container.settings.aiPref("private_use_note", "false").toBoolean())
+    }
     val scope = rememberCoroutineScope()
 
     fun currentConfig() = AiConfig(
@@ -184,6 +189,41 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                 }
                 Spacer(Modifier.height(10.dp))
             }
+            // 可选：每次生成都附一行「本机私用」声明，压制模型凭空引用平台规则。
+            // 默认关——作者要的是最大自由度；拒写时仍有自动重试兜底。
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("本机私用声明", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            if (privateNote) {
+                                "每次生成都附一行：没有平台、只给作者本人看。不会限制题材。"
+                            } else {
+                                "默认不加任何附加指令；模型拒写时会自动重试一次。"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = privateNote,
+                        onCheckedChange = {
+                            privateNote = it
+                            app.container.settings.rememberAiPref("private_use_note", it.toString())
+                        }
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+
             AutoParamsCard(
                 config = currentConfig()
             )
