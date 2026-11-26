@@ -287,6 +287,13 @@ class BackupService(
                     )
                 }
 
+            // 3.5) 关键：**清掉每一章的旧 journal**。
+            // journal 是「正文还没落盘时的回放记录」，回放时不看 revision。
+            // 恢复/导入把正文换成包里那份之后，旧的 journal 仍然会叠加上去——
+            // 因为 block id 是同一批，旧记录会把恢复的正文一段段改回去，
+            // 表现就是「点恢复成功、打开还是老内容」。这里必须一起清。
+            bundle.chapters.forEach { chapterFiles.clearJournal(it.id) }
+
             // 4) 数据库整包替换在一个事务里：任一条失败自动回滚
             db.withTransaction {
                 db.noteDao().deleteAll()

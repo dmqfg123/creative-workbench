@@ -146,6 +146,8 @@ import com.creativeworkbench.writer.ui.design.GhostButton
 import com.creativeworkbench.writer.ui.design.IconAction
 import com.creativeworkbench.writer.ui.design.PillButton
 import com.creativeworkbench.writer.ui.design.Tag
+import com.creativeworkbench.writer.ui.editor.BodyEditor
+import com.creativeworkbench.writer.ui.editor.BodyEditorController
 import com.creativeworkbench.writer.ui.editor.EditorViewModel
 import com.creativeworkbench.writer.ui.editor.EditorViewModelFactory
 import com.creativeworkbench.writer.ui.editor.FocusScrollTarget
@@ -199,7 +201,8 @@ fun EditorScreen(
     var aiOpen by remember { mutableStateOf(false) }
     var pendingSelection by remember { mutableStateOf<SelectionInfo?>(null) }
     val composedAtMs = remember { android.os.SystemClock.elapsedRealtime() }
-    val listState = rememberLazyListState()
+    // 单一编辑面的控制器：外部改文本/定位光标/滚动都由它做，绝不 setText
+    val bodyController = remember { BodyEditorController() }
     val density = LocalDensity.current
     val keyboard = LocalSoftwareKeyboardController.current
     val bottomMarginPx = with(density) { 12.dp.roundToPx() }
@@ -230,21 +233,6 @@ fun EditorScreen(
         }
     }
 
-    // 继续上次位置：记住当前章的第一可见段和偏移。
-    LaunchedEffect(state.loading, state.blocks.size) {
-        if (!state.loading && !restoredPosition && state.blocks.isNotEmpty()) {
-            val saved = positionPrefs.getString(chapterId, null)
-            if (saved != null) {
-                val parts = saved.split('|')
-                val blockId = parts.firstOrNull()
-                val offset = parts.getOrNull(1)?.toIntOrNull() ?: 0
-                // 列表第 0 项是章节头，正文段要从 item 下标 +1 算
-                val index = state.blocks.indexOfFirst { it.id == blockId }
-                if (index >= 0) listState.scrollToItem(index + 1, offset)
-            }
-            restoredPosition = true
-        }
-    }
     LaunchedEffect(state.loading) {
         if (!state.loading) {
             android.util.Log.i(
@@ -259,13 +247,28 @@ fun EditorScreen(
             viewModel.persistChapterNote()
         }
     }
+    // 继续上次位置：单一编辑面下记「光标偏移 + 滚动位置」，比记 block id 稳
     LaunchedEffect(chapterId) {
-        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
-            .collectLatest { (index, offset) ->
-                delay(600)
-                val blockId = state.blocks.getOrNull(index - 1)?.id ?: return@collectLatest
-                positionPrefs.edit().putString(chapterId, blockId + "|" + offset).apply()
+        snapshotFlow { bodyController.caret() to bodyController.scrollY() }
+            .distinctUntilChanged()
+            .collectLatest { (caret, scroll) ->
+                delay(700)
+                positionPrefs.edit().putInt(chapterId + ":caret", caret)
+                    .putInt(chapterId + ":scroll", scroll).apply()
             }
+    }
+    // 恢复到上次光标（只在章节加载完成后做一次）
+    LaunchedEffect(state.loading) {
+        if (!state.loading && !restoredPosition) {
+            val caret = positionPrefs.getInt(chapterId + ":caret", 0)
+            val scroll = positionPrefs.getInt(chapterId + ":scroll", 0)
+            if (caret > 0) {
+                delay(120)
+                bodyController.moveCaret(caret)
+                bodyController.scrollTo(scroll)
+            }
+            restoredPosition = true
+        }
     }
 
     // 只在切换段落 / 键盘弹出或收起时对齐几次（等键盘动画落定），**不监听滚动**：
@@ -273,19 +276,22 @@ fun EditorScreen(
     // 0.13：把「键盘是否弹出」也作为触发条件——之前只在切段时对齐一次，
     // 搜狗键盘弹得慢（>600ms）时视口还没缩完就对齐完了，光标又被挡在键盘后面，
     // 用户看到的就是「自动顶到键盘上面这个功能时灵时不灵」。
+    // 键盘弹出/候选条高度变化后，把光标行顶进可视区。
+    // 单一编辑面下这是 EditText 自己的 requestRectangleOnScreen，不再靠 LazyColumn 算偏移，
+    // 所以「长段落里的光标」也能保证可见（旧的分块设计这里必然失败）。
     val imePx = WindowInsets.ime.getBottom(density)
-    val imeVisible = imePx > 0
-    // 用「实际 insets 高度」而不是布尔值做 key：26 键/9 键切换、候选条展开都会改变高度，
-    // 只按「弹出/收起」触发的话这些情况不会重新对齐。
-    LaunchedEffect(state.activeBlockId, imePx) {
-        val activeId = state.activeBlockId ?: return@LaunchedEffect
-        val lazyIndex = state.blocks.indexOfFirst { block -> block.id == activeId } + 1
-        if (lazyIndex <= 0) return@LaunchedEffect
-        val waits = if (imeVisible) listOf(120L, 320L, 560L, 820L) else listOf(120L, 260L)
-        waits.forEach { wait ->
+    LaunchedEffect(imePx, state.activeBlockId) {
+        if (imePx <= 0) return@LaunchedEffect
+        listOf(120L, 360L, 700L).forEach { wait ->
             delay(wait)
-            alignFocusedBlock(listState, lazyIndex, bottomMarginPx)
+            bodyController.scrollCaretIntoView()
         }
+    }
+    // 段落操作/撤销后由 VM 指定光标位置
+    LaunchedEffect(state.pendingCaret) {
+        val target = state.pendingCaret ?: return@LaunchedEffect
+        bodyController.setTextExternally(viewModel.bodyText(), target)
+        viewModel.clearPendingCaret()
     }
     // 撤销条 4 秒后自己消失（不阻塞任何操作）
     LaunchedEffect(undoBarVisible) {
@@ -415,100 +421,52 @@ fun EditorScreen(
         }
 
         Column(Modifier.fillMaxSize().imePadding()) {
-          BoxWithConstraints(Modifier.weight(1f)) {
-            // 正在写的这一段最多占视口 55%：段落再长也在框内自己滚，
-            // 光标永远在键盘上方，不用手指去拉页面。
-            val maxBlockHeight = maxHeight * 0.55f
-            LaunchedEffect(maxHeight) { activeBlockMaxHeight = maxBlockHeight }
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 10.dp, bottom = 20.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                item {
-                    EditorHeader(
-                        chapterTitle = state.chapterTitle,
-                        wordCount = state.wordCount,
-                        saving = state.saving,
-                        dirty = state.dirty,
-                        error = state.error,
-                        empty = state.blocks.all { it.text.isBlank() },
-                        note = state.chapterNote,
-                        noteExpanded = noteExpanded,
-                        onToggleNote = {
-                            if (noteExpanded) viewModel.persistChapterNote()
-                            noteExpanded = !noteExpanded
-                        },
-                        onNoteChange = {
-                            viewModel.setChapterNote(it)
-                        },
-                        warning = when {
-                            state.wordCount >= 50_000 -> "单章已超过 5 万字，建议拆分为多章"
-                            (activeBlockText?.length ?: 0) > 2000 -> "本段较长，建议按情节分段"
-                            else -> null
-                        },
-                        onStartWriting = {
-                            state.blocks.firstOrNull()?.let { block ->
-                                viewModel.activate(block.id, 0)
-                            }
-                        },
-                        onRetrySave = { viewModel.retrySave() },
-                        onExportBackup = { backupExport.launch("雨刮模拟器-紧急备份.json.gz") }
-                    )
-                }
-                itemsIndexed(state.blocks, key = { _, block -> block.id }) { index, block ->
-                    if (state.activeBlockId == block.id) {
-                        Column(Modifier.fillMaxWidth()) {
-                            ActiveBlockEditor(
-                                block = block,
-                                cursorOffset = state.cursorOffset,
-                                onTextChange = { viewModel.onTextChanged(block.id, it) },
-                                onSplitAt = { viewModel.splitBlock(block.id, it) },
-                                onMergePrevious = { viewModel.mergePreviousInto(block.id) },
-                                onAiRewrite = { selected, start, end ->
-                                    val blockId = state.activeBlockId ?: block.id
-                                    pendingSelection = SelectionInfo(blockId, start, end, selected)
-                                    keyboard?.hide()
-                                    aiOpen = true
-                                    aiViewModel.prepare(
-                                        AiActions.REWRITE,
-                                        state.blocks,
-                                        blockId,
-                                        SelectionInfo(blockId, start, end, selected)
-                                    )
-                                },
-                                textSizeSp = bodySize,
-                                lineHeightSp = lineHeight,
-                                maxHeight = activeBlockMaxHeight,
-                                modifier = Modifier.fillMaxWidth()
-                            )
+            Column(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp)) {
+                EditorHeader(
+                    chapterTitle = state.chapterTitle,
+                    wordCount = state.wordCount,
+                    saving = state.saving,
+                    dirty = state.dirty,
+                    error = state.error,
+                    empty = state.blocks.all { it.text.isBlank() },
+                    note = state.chapterNote,
+                    noteExpanded = noteExpanded,
+                    onToggleNote = {
+                        if (noteExpanded) viewModel.persistChapterNote()
+                        noteExpanded = !noteExpanded
+                    },
+                    onNoteChange = {
+                        viewModel.setChapterNote(it)
+                    },
+                    warning = when {
+                        state.wordCount >= 50_000 -> "单章已超过 5 万字，建议拆分为多章"
+                        state.caretBlockChars > 2000 -> "本段较长，建议按情节分段"
+                        else -> null
+                    },
+                    onStartWriting = { bodyController.focusAndShowKeyboard() },
+                    onRetrySave = { viewModel.retrySave() },
+                    onExportBackup = { backupExport.launch("雨刮模拟器-紧急备份.json.gz") }
+                )
+                // 正文：一整章一个 EditText（见 BodyEditor 的注释：为什么不能一段一个）
+                BodyEditor(
+                    controller = bodyController,
+                    text = viewModel.bodyText(),
+                    textSizeSp = bodySize,
+                    lineHeightSp = lineHeight,
+                    onTextChange = { viewModel.onBodyEdited(it) },
+                    onSelectionChange = { viewModel.onCaretMoved(it) },
+                    onAiRewriteSelection = { start, end, selected ->
+                        val info = viewModel.selectionInfo(start, end)
+                        if (info != null) {
+                            pendingSelection = info
+                            keyboard?.hide()
+                            aiOpen = true
+                            aiViewModel.prepare(AiActions.REWRITE, state.blocks, info.blockId, info)
                         }
-                    } else {
-                        InactiveBlock(
-                            block = block,
-                            textSizeSp = bodySize,
-                            lineHeightSp = lineHeight,
-                            onActivate = { offset -> viewModel.activate(block.id, offset) }
-                        )
-                    }
-                }
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        TextButton(
-                            onClick = { viewModel.insertAfter(state.blocks.lastOrNull()?.id.orEmpty()) }
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("继续写下一段")
-                        }
-                    }
-                }
+                    },
+                    modifier = Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp, bottom = 12.dp)
+                )
             }
-          }
 
             AnimatedVisibility(
                 visible = true,
@@ -525,11 +483,11 @@ fun EditorScreen(
                     SnackbarHost(hostState = snackbar, modifier = Modifier.fillMaxWidth())
                     // 正在编辑哪一段，说清楚：之前点段落没有任何选中反馈，
                     // 用户不知道「上移/删除」作用在哪一段，只能靠猜。
-                    val activeIndex = state.blocks.indexOfFirst { it.id == state.activeBlockId }
-                    if (activeIndex >= 0) {
+                    val activeIndex = state.caretBlockIndex
+                    if (state.blocks.isNotEmpty()) {
                         Text(
-                            "第 " + (activeIndex + 1) + " / " + state.blocks.size + " 段 · " +
-                                state.blocks[activeIndex].text.length + " 字",
+                            "第 " + (activeIndex + 1).coerceAtMost(state.blocks.size) + " / " +
+                                state.blocks.size + " 段 · " + state.caretBlockChars + " 字",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -552,22 +510,21 @@ fun EditorScreen(
                     EditorToolbar(
                         undoAvailable = state.undoAvailable,
                         redoAvailable = state.redoAvailable,
-                        hasActiveBlock = state.activeBlockId != null,
-                        canMoveUp = state.blocks.indexOfFirst { it.id == state.activeBlockId } > 0,
-                        canMoveDown = state.blocks.indexOfFirst { it.id == state.activeBlockId }
-                            .let { it in 0 until state.blocks.lastIndex },
+                        hasActiveBlock = state.blocks.isNotEmpty(),
+                        canMoveUp = state.caretBlockIndex > 0,
+                        canMoveDown = state.caretBlockIndex < state.blocks.lastIndex,
                         onUndo = viewModel::undo,
                         onRedo = viewModel::redo,
-                        onMoveUp = { state.activeBlockId?.let { viewModel.move(it, -1) } },
-                        onMoveDown = { state.activeBlockId?.let { viewModel.move(it, 1) } },
+                        onMoveUp = { viewModel.moveParagraphAtCaret(-1) },
+                        onMoveDown = { viewModel.moveParagraphAtCaret(1) },
                         onAdd = {
-                            val id = state.activeBlockId ?: state.blocks.lastOrNull()?.id
-                            if (id != null) viewModel.insertAfter(id)
+                            viewModel.insertParagraphAtCaret()
+                            bodyController.focusAndShowKeyboard()
                         },
                         onDelete = {
-                            val activeId = state.activeBlockId
-                            if (activeId != null) {
-                                viewModel.remove(activeId)
+                            val hadText = state.caretBlockChars > 0
+                            viewModel.deleteParagraphAtCaret()
+                            if (hadText) {
                                 undoBarText = "已删除这一段"
                                 undoBarVisible = true
                             }

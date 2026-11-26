@@ -12,6 +12,7 @@ import com.creativeworkbench.writer.core.data.ChapterEntity
 import com.creativeworkbench.writer.core.data.OpenChapterResult
 import com.creativeworkbench.writer.core.data.SaveResult
 import com.creativeworkbench.writer.core.data.UpdateSource
+import com.creativeworkbench.writer.core.ai.SelectionInfo
 import com.creativeworkbench.writer.core.editor.EditCommand
 import com.creativeworkbench.writer.core.editor.EditEngine
 import com.creativeworkbench.writer.core.editor.UndoEntry
@@ -54,7 +55,13 @@ data class EditorUiState(
     val error: String? = null,
     val loading: Boolean = true,
     val undoAvailable: Boolean = false,
-    val redoAvailable: Boolean = false
+    val redoAvailable: Boolean = false,
+    /** 光标所在的段落下标（单一编辑面里由光标位置推出来）。 */
+    val caretBlockIndex: Int = 0,
+    /** 光标所在段落的字数（底栏「第 N / M 段 · X 字」用）。 */
+    val caretBlockChars: Int = 0,
+    /** 撤销/段落操作后要求把光标放到这里（界面消费后清空）。 */
+    val pendingCaret: Int? = null
 )
 
 class EditorViewModel(
@@ -299,6 +306,165 @@ class EditorViewModel(
         return true
     }
 
+    // ================= 单一编辑面（0.17.0） =================
+
+    /** 整篇正文：段落之间用换行连接。 */
+    fun bodyText(): String = _state.value.blocks.joinToString("\n") { it.text }
+
+    /**
+     * 单一编辑面里的一次文本变化。
+     * 只重切段落，不动 EditText：这样输入法的组合态不会被 setText 打断。
+     */
+    fun onBodyEdited(newText: String) {
+        val before = bodyText()
+        if (before == newText) return
+        pushUndo(before, _state.value.cursorOffset)
+        val blocks = reblock(newText, _state.value.blocks)
+        recomputeCounts(blocks)
+        _state.update {
+            it.copy(
+                blocks = blocks,
+                wordCount = blockWordCounts.values.sum(),
+                dirty = true,
+                error = null,
+                caretBlockIndex = _state.value.caretBlockIndex.coerceIn(0, (blocks.size - 1).coerceAtLeast(0)),
+                caretBlockChars = blocks.getOrNull(_state.value.caretBlockIndex)?.text?.length ?: 0,
+                undoAvailable = textUndo.isNotEmpty()
+            )
+        }
+        editVersion++
+        markDirty(blocks)
+    }
+
+    /** 光标移动：更新 AI 用的锚点段落与底栏段号。 */
+    fun onCaretMoved(offset: Int) {
+        val text = bodyText()
+        val caret = offset.coerceIn(0, text.length)
+        val index = text.take(caret).count { it == '\n' }
+        val blocks = _state.value.blocks
+        val block = blocks.getOrNull(index)
+        _state.update {
+            it.copy(
+                cursorOffset = caret,
+                caretBlockIndex = index,
+                caretBlockChars = block?.text?.length ?: 0,
+                activeBlockId = block?.id
+            )
+        }
+    }
+
+    /** 选区 → AI 用的 SelectionInfo（blockId + 段内偏移）。 */
+    fun selectionInfo(start: Int, end: Int): SelectionInfo? {
+        val text = bodyText()
+        if (start < 0 || end > text.length || start >= end) return null
+        val index = text.take(start).count { it == '\n' }
+        val block = _state.value.blocks.getOrNull(index) ?: return null
+        val lineStart = text.lastIndexOf('\n', (start - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }
+        val localStart = (start - lineStart).coerceIn(0, block.text.length)
+        val localEnd = (localStart + (end - start)).coerceIn(0, block.text.length)
+        return SelectionInfo(block.id, localStart, localEnd, text.substring(start, end))
+    }
+
+    /** 在光标处插入一个段（工具栏「新段」）。 */
+    fun insertParagraphAtCaret() {
+        val text = bodyText()
+        val caret = _state.value.cursorOffset.coerceIn(0, text.length)
+        applyTextEdit(text.substring(0, caret) + "\n" + text.substring(caret), caret + 1)
+    }
+
+    /** 删除光标所在段（工具栏「删段」）：连同它后面的换行一起删。 */
+    fun deleteParagraphAtCaret() {
+        val text = bodyText()
+        val caret = _state.value.cursorOffset.coerceIn(0, text.length)
+        val start = paragraphStart(text, caret)
+        val end = paragraphEnd(text, caret)
+        val newText = when {
+            end < text.length -> text.removeRange(start, end + 1)
+            start > 0 -> text.removeRange(start - 1, end)
+            else -> ""
+        }
+        val newCaret = start.coerceIn(0, newText.length)
+        applyTextEdit(newText, newCaret)
+    }
+
+    /** 上移/下移光标所在段。 */
+    fun moveParagraphAtCaret(delta: Int) {
+        val text = bodyText()
+        val caret = _state.value.cursorOffset.coerceIn(0, text.length)
+        val lines = text.split('\n').toMutableList()
+        val index = text.take(caret).count { it == '\n' }
+        val target = index + delta
+        if (index !in lines.indices || target !in lines.indices) return
+        val moved = lines.removeAt(index)
+        lines.add(target, moved)
+        val newText = lines.joinToString("\n")
+        val newCaret = lines.take(target).sumOf { it.length + 1 }
+        applyTextEdit(newText, newCaret)
+    }
+
+    /** 界面消费完 pendingCaret 后清掉，避免重复定位。 */
+    fun clearPendingCaret() {
+        if (_state.value.pendingCaret != null) _state.update { it.copy(pendingCaret = null) }
+    }
+
+    private fun paragraphStart(text: String, caret: Int): Int =
+        text.lastIndexOf('\n', (caret - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }
+
+    private fun paragraphEnd(text: String, caret: Int): Int =
+        text.indexOf('\n', caret).let { if (it < 0) text.length else it }
+
+    /** 统一入口：改全文 + 落段 + 定位光标；推撤销。 */
+    private fun applyTextEdit(newText: String, caret: Int) {
+        val before = bodyText()
+        if (before == newText) return
+        pushUndo(before, _state.value.cursorOffset, coalesce = false)
+        val blocks = reblock(newText, _state.value.blocks)
+        recomputeCounts(blocks)
+        val index = newText.take(caret.coerceIn(0, newText.length)).count { it == '\n' }
+        _state.update {
+            it.copy(
+                blocks = blocks,
+                wordCount = blockWordCounts.values.sum(),
+                dirty = true,
+                error = null,
+                cursorOffset = caret,
+                caretBlockIndex = index.coerceIn(0, (blocks.size - 1).coerceAtLeast(0)),
+                caretBlockChars = blocks.getOrNull(index)?.text?.length ?: 0,
+                pendingCaret = caret,
+                undoAvailable = true,
+                redoAvailable = false
+            )
+        }
+        editVersion++
+        markDirty(blocks)
+    }
+
+    /** 按换行切段：同一位置文本没变就沿用旧 block id（快照/journal 都按 id 记）。 */
+    private fun reblock(text: String, old: List<Block>): List<Block> {
+        val parts = text.split('\n')
+        val used = HashSet<String>()
+        return parts.mapIndexed { index, part ->
+            val candidate = old.getOrNull(index)
+            val id = if (candidate != null && candidate.text == part && used.add(candidate.id)) {
+                candidate.id
+            } else {
+                UUID.randomUUID().toString()
+            }
+            Block(id, part)
+        }
+    }
+
+    /** 只重算文本真的变了的那些段，避免每敲一个字就全篇数一遍。 */
+    private fun recomputeCounts(blocks: List<Block>) {
+        val alive = blocks.map { it.id }.toSet()
+        blockWordCounts.keys.retainAll(alive)
+        blocks.forEach { block ->
+            if (!blockWordCounts.containsKey(block.id)) {
+                blockWordCounts[block.id] = repository.countWords(listOf(block))
+            }
+        }
+    }
+
     fun contentHash(): String {
         val digest = java.security.MessageDigest.getInstance("SHA-256")
         _state.value.blocks.forEach { block ->
@@ -462,42 +628,64 @@ class EditorViewModel(
         _state.update { it.copy(activeBlockId = newBlock.id, cursorOffset = 0) }
     }
 
-    fun undo() {
-        val entry = undoStack.removeLastOrNull() ?: return
-        redoStack.addLast(entry)
-        _state.update {
-            it.copy(
-                blocks = entry.before,
-                wordCount = refreshWordCounts(entry.before),
-                dirty = true,
-                activeBlockId = entry.before.firstOrNull { block -> block.id == it.activeBlockId }?.id
-                    ?: entry.before.firstOrNull()?.id,
-                cursorOffset = 0,
-                undoAvailable = undoStack.isNotEmpty(),
-                redoAvailable = true
-            )
+    // ---- 文本级撤销（0.17.0）：单一编辑面下，「输入的字也能撤销」 ----
+
+    private data class TextSnapshot(val text: String, val caret: Int)
+
+    private val textUndo = ArrayDeque<TextSnapshot>()
+    private val textRedo = ArrayDeque<TextSnapshot>()
+    private var lastUndoAt = 0L
+
+    /**
+     * 压一步撤销。连续输入按 700ms 合并：否则打十个字要按十次撤销。
+     * coalesce=false 用于「段落操作」这类一次就要能整体回退的动作。
+     */
+    private fun pushUndo(before: String, caret: Int, coalesce: Boolean = true) {
+        val now = System.currentTimeMillis()
+        if (coalesce && now - lastUndoAt < 700 && textUndo.isNotEmpty()) {
+            lastUndoAt = now
+            return
         }
-        editVersion++
-        markDirty(entry.before)
+        textUndo.addLast(TextSnapshot(before, caret))
+        while (textUndo.size > 120) textUndo.removeFirst()
+        textRedo.clear()
+        lastUndoAt = now
+    }
+
+    fun undo() {
+        val snapshot = textUndo.removeLastOrNull() ?: return
+        textRedo.addLast(TextSnapshot(bodyText(), _state.value.cursorOffset))
+        applyTextSnapshot(snapshot)
+        _state.update { it.copy(undoAvailable = textUndo.isNotEmpty(), redoAvailable = true) }
     }
 
     fun redo() {
-        val entry = redoStack.removeLastOrNull() ?: return
-        undoStack.addLast(entry)
+        val snapshot = textRedo.removeLastOrNull() ?: return
+        textUndo.addLast(TextSnapshot(bodyText(), _state.value.cursorOffset))
+        applyTextSnapshot(snapshot)
+        _state.update { it.copy(undoAvailable = true, redoAvailable = textRedo.isNotEmpty()) }
+    }
+
+    private fun applyTextSnapshot(snapshot: TextSnapshot) {
+        val blocks = reblock(snapshot.text, _state.value.blocks)
+        recomputeCounts(blocks)
+        val index = snapshot.text.take(snapshot.caret.coerceIn(0, snapshot.text.length)).count { it == '\n' }
         _state.update {
             it.copy(
-                blocks = entry.after,
-                wordCount = refreshWordCounts(entry.after),
+                blocks = blocks,
+                wordCount = blockWordCounts.values.sum(),
                 dirty = true,
-                activeBlockId = entry.after.firstOrNull { block -> block.id == it.activeBlockId }?.id
-                    ?: entry.after.firstOrNull()?.id,
-                cursorOffset = 0,
-                undoAvailable = true,
-                redoAvailable = redoStack.isNotEmpty()
+                cursorOffset = snapshot.caret.coerceIn(0, snapshot.text.length),
+                caretBlockIndex = index.coerceIn(0, (blocks.size - 1).coerceAtLeast(0)),
+                caretBlockChars = blocks.getOrNull(index)?.text?.length ?: 0,
+                pendingCaret = snapshot.caret.coerceIn(0, snapshot.text.length),
+                undoAvailable = textUndo.isNotEmpty(),
+                redoAvailable = textRedo.isNotEmpty()
             )
         }
+        lastUndoAt = 0L
         editVersion++
-        markDirty(entry.after)
+        markDirty(blocks)
     }
 
     fun flush() {

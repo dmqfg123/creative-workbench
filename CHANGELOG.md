@@ -2,6 +2,39 @@
 
 # CHANGELOG
 
+## 0.17.0（2026-11-26）正文编辑器重做：单一文本面
+
+用户反馈「编辑器有严重 bug，段落显示的字被挤压看不见」，并要求参考成熟项目重做，不要打补丁。
+
+### 定位（见 参考/编辑器实现调研_20261126.md）
+
+- 真机复现：长段落被限制在视口 55% 的小框里，剩下的字在框内滚动看不见 —— 对上了「被挤压」。
+- 更深的原因在 AOSP：`TextView.setText(CharSequence, EDITABLE)` 会新建 Editable、清撤销栈，并在下一帧
+  `scheduleRestartInputForSetText()` 重启输入法，而 IME 手里的 InputConnection 还指着旧 Editable ——
+  「一段一个 EditText + 回写 setText」**必然**吞字/跳光标。
+- 而且「一段一个 EditText」在开源界没有成熟实现（Quillpad/Notally 各 1 个 EditText、novelWriter 1 个 QTextEdit、
+  Joplin 1 个 WebView、hammer 1 个自绘编辑器；cascade-editor 虽然分块但从不 setText、失焦也不 clearFocus）。
+
+### 改造
+
+- 正文改为**一整章一个 EditText、一个 Editable**：`setEditableFactory` 恒定返回同一块 SpannableStringBuilder，
+  外部改文本一律 `editable.replace()`，**永不 setText**。
+- 段落是「按 \n 派生的数据」：回车就是换行、段首退格就是删换行，拆块/合并那一整类 bug 消失。
+- 去掉 55% 高度上限与内部滚动：整篇连续滚动，光标用 `requestRectangleOnScreen` 保持可见。
+- 段落间距用 `LineHeightSpan`（只抬每段首行），保持可读。
+- 撤销改成**文本快照**（700ms 合并）：现在**打字也能撤销**（旧实现只对结构操作有效）。
+- 底栏「第 N / M 段 · X 字」改为由光标位置推导。
+
+### 同时修掉
+
+- **恢复备份后正文没换**：`importReplace` 换完章节文件后没有清 journal，而 journal 回放不看 revision、
+  block id 又与恢复前同批，旧记录会把恢复出来的正文一段段改回去。现在每章都会 `clearJournal`。
+
+### 验证
+
+- 真机：正文连续无截断、段落有间距；点任意位置输入落在所点处；回车新起一段且光标在新段；撤销能退回上一段。
+- 未复验：恢复链路（本地旧备份已被这几轮测试覆盖）、长按退格跨段、200% 字号、5 万字实跑。
+
 ## 0.16.0（2026-11-26）板块联动：交叉索引（提到 / 被提到）
 
 参考机制见 参考/板块联动设计_20261126.md：novelWriter 的索引（前向引用 + 反向引用 + 使用计数）、
