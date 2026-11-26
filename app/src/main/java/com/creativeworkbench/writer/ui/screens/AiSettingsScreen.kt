@@ -85,6 +85,33 @@ fun AiSettingsScreen(onBack: () -> Unit) {
     LaunchedEffect(model) {
         modelPrompt = app.container.settings.aiPref("model_prompt:" + model.trim(), "")
     }
+    var presetStatus by remember { mutableStateOf<String?>(null) }
+    // 导入酒馆（SillyTavern）预设：只取系统提示 / post-history / 助手预填三块
+    val presetPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val text = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+        }.getOrNull()
+        if (text.isNullOrBlank()) {
+            presetStatus = "文件读不出来"
+            return@rememberLauncherForActivityResult
+        }
+        val parsed = com.creativeworkbench.writer.core.ai.StPresetParser.parse(text)
+        if (parsed.error != null) {
+            presetStatus = "导入失败：" + parsed.error
+            return@rememberLauncherForActivityResult
+        }
+        val key = model.trim()
+        app.container.settings.rememberAiPref("model_prompt:" + key, parsed.system)
+        app.container.settings.rememberAiPref("post_history:" + key, parsed.postHistory)
+        app.container.settings.rememberAiPref("prefill:" + key, parsed.prefill)
+        modelPrompt = parsed.system
+        presetStatus = "已导入：" + parsed.imported.joinToString("、") +
+            "（系统 " + parsed.system.length + " 字 / 后期 " + parsed.postHistory.length +
+            " 字 / 预填 " + parsed.prefill.length + " 字）"
+    }
     val scope = rememberCoroutineScope()
 
     fun currentConfig() = AiConfig(
@@ -271,6 +298,9 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                     app.container.settings.rememberAiPref("model_prompt:" + model.trim(), "")
                 }) { Text("清空") }
                 TextButton(onClick = {
+                    presetPicker.launch(arrayOf("application/json", "text/plain", "*/*"))
+                }) { Text("导入酒馆预设") }
+                TextButton(onClick = {
                     // 5C 极简契约（Character/Cause/Constraint/Contingency/Calibration），
                     // 不写人设、不写文风、不限题材，只约束「怎么交付」。
                     val tpl = "角色：你是我的写作执行者。\n" +
@@ -281,6 +311,13 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                     modelPrompt = tpl
                     app.container.settings.rememberAiPref("model_prompt:" + model.trim(), tpl)
                 }) { Text("填入极简模板") }
+            }
+            presetStatus?.let { message ->
+                Text(
+                    message,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
             }
 
             Spacer(Modifier.height(10.dp))

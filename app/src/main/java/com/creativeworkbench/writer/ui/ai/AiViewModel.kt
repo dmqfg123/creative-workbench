@@ -141,6 +141,10 @@ class AiViewModel(
         customPrompt = container.settings.aiPref(
             "model_prompt:" + configStore.config().model.trim(),
             ""
+        ),
+        postHistory = container.settings.aiPref(
+            "post_history:" + configStore.config().model.trim(),
+            ""
         )
     )
 
@@ -295,6 +299,11 @@ class AiViewModel(
                 ChatMessage("system", prepared.system),
                 ChatMessage("user", prepared.user)
             )
+            // 酒馆预设的助手预填：最后一条给 assistant 半句，模型只能顺着写（抑制拒写最有效的手段）
+            val prefill = container.settings.aiPref(
+                "prefill:" + config.model.trim(), ""
+            ).trim()
+            if (prefill.isNotEmpty()) messages.add(ChatMessage("assistant", prefill))
             val tuned = ActionTuning(maxTokens = maxTokensFor(action, config))
             val collected = StringBuilder()
             var usage: AiUsage? = null
@@ -372,7 +381,15 @@ class AiViewModel(
                 _state.update { it.copy(generating = false, error = failure) }
                 return@launch
             }
-            val cleaned = AiOutputSanitizer.clean(collected.toString())
+            // 预填的那半句模型不会再吐一遍（它是在其后续写）；若吐了就去重
+            val rawWithPrefill = collected.toString()
+            val prefillUsed = messages.lastOrNull()?.takeIf { it.role == "assistant" }?.content.orEmpty()
+            val dePrefilled = if (prefillUsed.isNotEmpty() && rawWithPrefill.startsWith(prefillUsed)) {
+                rawWithPrefill.removePrefix(prefillUsed)
+            } else {
+                rawWithPrefill
+            }
+            val cleaned = AiOutputSanitizer.clean(dePrefilled)
             if (RefusalGuard.looksLikeRefusal(cleaned)) {
                 _state.update {
                     it.copy(

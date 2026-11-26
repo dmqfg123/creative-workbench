@@ -207,17 +207,27 @@ class AiChatViewModel(
                 .takeLast(12)
                 .filter { it.role == "user" || it.role == "assistant" }
                 .map { ChatMessage(it.role, it.text) }
+            val postHistory = container.settings
+                .aiPref("post_history:" + config.model.trim(), "").trim()
             val payload = buildString {
                 if (searchNote.isNotBlank()) {
                     appendLine(searchNote)
                     appendLine()
                 }
                 append(question)
+                if (postHistory.isNotEmpty()) {
+                    appendLine()
+                    appendLine()
+                    append(postHistory)
+                }
             }
             val messages = mutableListOf<ChatMessage>()
             if (system.isNotBlank()) messages.add(ChatMessage("system", system))
             messages.addAll(history)
             messages.add(ChatMessage("user", payload))
+            val prefill = container.settings
+                .aiPref("prefill:" + config.model.trim(), "").trim()
+            if (prefill.isNotEmpty()) messages.add(ChatMessage("assistant", prefill))
 
             // 工具：只有选了作品才有意义（读不到项目数据时给工具反而让它乱试）。
             val specs = if (useTools) projectTools.specs() else null

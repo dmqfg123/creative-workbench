@@ -69,7 +69,9 @@ data class ContextOptions(
     /** 是否在 system 前加「本机私用」声明（设置项，默认关：让模型保持完全自由）。 */
     val privateUseNote: Boolean = false,
     /** 作者为「当前模型」自定义的提示词（设置项，默认空）。留空就完全用自己的动作提示词。 */
-    val customPrompt: String = ""
+    val customPrompt: String = "",
+    /** 酒馆预设里的 post_history_instructions：放在最后一条 user 的末尾（酒馆就是这么用的）。 */
+    val postHistory: String = ""
 )
 
 /**
@@ -358,6 +360,11 @@ class AiContextBuilder(
                 instructionOverride?.takeIf { it.isNotBlank() }
                     ?: actionInstruction(action, selection, options.lengthChars)
             )
+            if (options.postHistory.isNotBlank()) {
+                appendLine()
+                appendLine()
+                append(options.postHistory.trim())
+            }
         }
 
         val settingChars = settingText.length
