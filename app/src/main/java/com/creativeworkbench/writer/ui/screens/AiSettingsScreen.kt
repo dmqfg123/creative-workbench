@@ -116,8 +116,19 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                 )
                 Tag(
                     text = "自己搭的兼容服务",
-                    active = !baseUrl.contains("deepseek", ignoreCase = true),
+                    active = !baseUrl.contains("deepseek", ignoreCase = true) && !baseUrl.contains(":11434"),
                     onClick = { if (baseUrl.contains("deepseek", ignoreCase = true)) baseUrl = "" }
+                )
+                Tag(
+                    text = "本机模型（Ollama）",
+                    active = baseUrl.contains(":11434"),
+                    onClick = {
+                        // 手机上的 127.0.0.1 是手机自己，必须填电脑的局域网 IP。
+                        // Ollama 默认只监听 127.0.0.1，要在电脑上设 OLLAMA_HOST=0.0.0.0 才连得上。
+                        baseUrl = "http://192.168.1.100:11434/v1"
+                        allowCleartext = true
+                        status = "把 IP 换成电脑的局域网地址；电脑端先设置 OLLAMA_HOST=0.0.0.0 再 ollama serve"
+                    }
                 )
             }
             Spacer(Modifier.height(8.dp))
