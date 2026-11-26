@@ -1,9 +1,12 @@
-# 创作工作台（雨刮模拟器）
+![创作工作台](docs/banner.png)
+
+# 创作工作台（Creative Workbench）
 
 > 一个个人自用的 Android 长篇小说写作 App：以 AI 辅助为核心，数据只存本机。
 > 单机 · 无账号 · 无云同步 · GPL-3.0
 
-[![Android CI](https://github.com/USER/creative-workbench/actions/workflows/android.yml/badge.svg)](https://github.com/USER/creative-workbench/actions)
+[![Android CI](https://github.com/ZhangShiyv/creative-workbench/actions/workflows/android.yml/badge.svg)](https://github.com/ZhangShiyv/creative-workbench/actions)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
 ## 它是什么
 
@@ -28,7 +31,7 @@ DeepSeek Chat Completions（含 thinking / 工具调用 / JSON 模式），也�
 需要 JDK 17、Android SDK Platform 34、Build-Tools 34.0.0。
 
 ~~~bash
-git clone https://github.com/USER/creative-workbench.git
+git clone https://github.com/ZhangShiyv/creative-workbench.git
 cd creative-workbench
 # 把 SDK 路径写进 local.properties（不要提交）
 echo "sdk.dir=/path/to/Android/Sdk" > local.properties
@@ -59,6 +62,16 @@ app/src/main/java/com/creativeworkbench/writer/
 └── MainActivity.kt
 app/src/test/    124 条单元测试
 ~~~
+
+## 状态
+
+1.0.1 已在真机（Redmi Note 11 5G / Android 13 / HyperOS）日常使用；124 条单测全绿。
+已知待办见 Issues，取舍理由见项目文档与 `docs/`。
+
+## 参与
+
+见 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
+安全问题请走 [SECURITY.md](SECURITY.md)，不要开公开 Issue。
 
 ## 许可证
 
