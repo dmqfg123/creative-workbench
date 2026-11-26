@@ -14,8 +14,8 @@ android {
         applicationId = "com.creativeworkbench.writer"
         minSdk = 29
         targetSdk = 34
-        versionCode = 100
-        versionName = "1.0.0"
+        versionCode = 101
+        versionName = "1.0.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

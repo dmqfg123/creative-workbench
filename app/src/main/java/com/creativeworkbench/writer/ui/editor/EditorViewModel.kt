@@ -61,7 +61,9 @@ data class EditorUiState(
     /** 光标所在段落的字数（底栏「第 N / M 段 · X 字」用）。 */
     val caretBlockChars: Int = 0,
     /** 撤销/段落操作后要求把光标放到这里（界面消费后清空）。 */
-    val pendingCaret: Int? = null
+    val pendingCaret: Int? = null,
+    /** 本章历史快照（恢复用）。 */
+    val history: List<com.creativeworkbench.writer.core.data.SnapshotEntity> = emptyList()
 )
 
 class EditorViewModel(
@@ -80,6 +82,8 @@ class EditorViewModel(
     private var journalJob: Job? = null
     private var editVersion = 0L
     private var dirtySince = 0L
+    /** 自动快照节流：每 5 分钟最多一份，别把 200 个额度几分钟用完。 */
+    private var lastAutoSnapshotAt = 0L
 
     private val openedAtMs = android.os.SystemClock.elapsedRealtime()
 
@@ -522,6 +526,37 @@ class EditorViewModel(
     }
 
     /** 保存失败后手动重试。 */
+    /** 打开历史面板时拉一次。 */
+    fun loadHistory() {
+        viewModelScope.launch {
+            val list = runCatching { repository.snapshots(chapterId) }.getOrDefault(emptyList())
+            _state.update { it.copy(history = list) }
+        }
+    }
+
+    /** 恢复到某份历史快照（当前内容先压进撤销栈，可再撤回来）。 */
+    fun restoreSnapshot(snapshotId: String) {
+        viewModelScope.launch {
+            val snapshot = _state.value.history.firstOrNull { it.id == snapshotId } ?: return@launch
+            val blocks = runCatching { repository.readSnapshot(snapshot.path) }.getOrNull() ?: return@launch
+            pushUndo(bodyText(), _state.value.cursorOffset, coalesce = false)
+            _state.update {
+                it.copy(
+                    blocks = blocks,
+                    wordCount = refreshWordCounts(blocks),
+                    dirty = true,
+                    activeBlockId = null,
+                    cursorOffset = 0,
+                    pendingCaret = 0,
+                    history = emptyList(),
+                    error = null
+                )
+            }
+            editVersion++
+            markDirty(blocks)
+        }
+    }
+
     fun retrySave() {
         viewModelScope.launch { saveNow() }
     }
@@ -806,6 +841,12 @@ class EditorViewModel(
         val snapshot = _state.value
         if (!snapshot.dirty) return
         val version = editVersion
+        // 保存前顺手留一份历史（5 分钟一次）：误删/误操作/崩溃后能回滚
+        val snapshotNow = System.currentTimeMillis()
+        if (snapshotNow - lastAutoSnapshotAt > 5 * 60_000L) {
+            lastAutoSnapshotAt = snapshotNow
+            runCatching { repository.saveSnapshot(chapterId, snapshot.blocks) }
+        }
         _state.update { it.copy(saving = true) }
         val saved = runCatching {
             repository.saveChapter(chapterId, snapshot.blocks, snapshot.revision, UpdateSource.UserInput)

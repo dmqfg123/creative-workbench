@@ -371,6 +371,14 @@ class ChapterRepository(
         }
     }
 
+    /** 本章的历史快照（新的在前）。 */
+    suspend fun snapshots(chapterId: String): List<SnapshotEntity> =
+        withContext(Dispatchers.IO) { db.snapshotDao().listForChapter(chapterId) }
+
+    /** 把一份快照读成 blocks；文件被清掉时返回 null。 */
+    suspend fun readSnapshot(path: String): List<Block>? =
+        withContext(Dispatchers.IO) { files.readSnapshotFile(path)?.blocks }
+
     /** 写入前存快照：全局最多 200 个，按时间淘汰最早的。 */
     suspend fun saveSnapshot(chapterId: String, blocks: List<Block>) = withContext(Dispatchers.IO) {
         writeMutex.withLock {

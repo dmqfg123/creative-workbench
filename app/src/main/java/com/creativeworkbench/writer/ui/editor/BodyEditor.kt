@@ -559,6 +559,15 @@ class BodyEditText(context: Context) : EditText(context) {
         super.onDetachedFromWindow()
     }
 
+    /**
+     * lint 的 ClickableViewAccessibility：自定义了 onTouchEvent 就要显式实现 performClick，
+     * 否则读屏/无障碍服务无法触发点击。我们本来就设了 OnClickListener，这里转发即可。
+     */
+    override fun performClick(): Boolean {
+        super.performClick()
+        return true
+    }
+
     fun setOnSelectionChangedListener(listener: (Int) -> Unit) {
         selectionListener = listener
     }

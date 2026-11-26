@@ -2,6 +2,12 @@
 
 # CHANGELOG
 
+## 1.0.1（2026-11-26）本章历史 + 无障碍修复
+
+- **本章历史**：编辑保存时每 5 分钟自动留一份快照（全局上限仍是 200）；编辑器 → 点标题 → 「本章历史」→ 点一条即可恢复，恢复本身也能撤销。这是压力测试暴露「误删无处可回」后的补丁。
+- **无障碍**：BodyEditText 补 performClick（lint ClickableViewAccessibility）。
+- 其余 lint 告警（dataExtractionRules、anydpi-v26、enableOnBackInvokedCallback）不影响运行，留待后续。
+
 ## 1.0.0（2026-11-26）首个正式版
 
 三个只读智能体分域审查（AI 层 / 数据与编辑器 / 界面与测试，约 70 个文件），据其修复高危问题：

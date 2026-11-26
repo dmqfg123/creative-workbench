@@ -208,6 +208,7 @@ fun EditorScreen(
     var undoBarVisible by remember { mutableStateOf(false) }
     var undoBarText by remember { mutableStateOf("") }
     var chapterSheetOpen by remember { mutableStateOf(false) }
+    var historyOpen by remember { mutableStateOf(false) }
     var activeBlockMaxHeight by remember { mutableStateOf(320.dp) }
 
     val imeBottomPx = WindowInsets.ime.getBottom(density)
@@ -319,6 +320,9 @@ fun EditorScreen(
     LaunchedEffect(state.pendingCaret) {
         val target = state.pendingCaret ?: return@LaunchedEffect
         bodyController.setTextExternally(viewModel.bodyText(), target)
+        // 只 setSelection 不一定滚：从 AI 检查结果跳段、撤销后回填都要主动把光标行顶进可视区
+        delay(30)
+        bodyController.scrollCaretIntoView()
         viewModel.clearPendingCaret()
     }
     // 撤销条 4 秒后自己消失（不阻塞任何操作）
@@ -605,6 +609,12 @@ fun EditorScreen(
                 keyboard?.hide()
                 viewModel.flushAndBack(onOpenOutline)
             },
+            onOpenHistory = {
+                chapterSheetOpen = false
+                keyboard?.hide()
+                viewModel.loadHistory()
+                historyOpen = true
+            },
             onCreateNext = {
                 chapterSheetOpen = false
                 keyboard?.hide()
@@ -648,6 +658,17 @@ fun EditorScreen(
             state.blocks,
             state.activeBlockId,
             if (actionId == AiActions.REWRITE || actionId == AiActions.EXPAND) pendingSelection else null
+        )
+    }
+
+    if (historyOpen) {
+        HistorySheet(
+            items = state.history,
+            onRestore = { id ->
+                viewModel.restoreSnapshot(id)
+                historyOpen = false
+            },
+            onDismiss = { historyOpen = false }
         )
     }
 
@@ -1248,6 +1269,59 @@ private const val MENU_AI_REWRITE = 1001
  * 3) 顺手把「下一章 / 新建下一章」「作品目录」「本章大纲」放进同一个面板，
  *    用户不用先退出编辑器再找目录。
  */
+/** 本章历史：每 5 分钟自动留一份，误删/误操作后能回滚（恢复本身也能再撤销）。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HistorySheet(
+    items: List<com.creativeworkbench.writer.core.data.SnapshotEntity>,
+    onRestore: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val format = remember { java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()) }
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 20.dp, end = 20.dp, bottom = 16.dp)) {
+            Text("本章历史", style = MaterialTheme.typography.titleLarge)
+            Text(
+                "保存时每 5 分钟自动留一份；点一条恢复，恢复本身也能撤销。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            if (items.isEmpty()) {
+                Text(
+                    "还没有历史快照（编辑几分钟并保存后会出现）",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                androidx.compose.foundation.lazy.LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                    items(items, key = { it.id }) { snapshot ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onRestore(snapshot.id) }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                format.format(java.util.Date(snapshot.createdAtMs)),
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text("恢复", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChapterSheet(
@@ -1261,6 +1335,7 @@ private fun ChapterSheet(
     onPick: (String) -> Unit,
     onOpenDirectory: () -> Unit,
     onOpenOutline: () -> Unit,
+    onOpenHistory: () -> Unit,
     onCreateNext: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -1313,6 +1388,7 @@ private fun ChapterSheet(
             ) {
                 GhostButton(text = "作品目录", onClick = onOpenDirectory)
                 GhostButton(text = "本章大纲", onClick = onOpenOutline)
+                GhostButton(text = "本章历史", onClick = onOpenHistory)
             }
             if (nextChapter != null) {
                 TextButton(

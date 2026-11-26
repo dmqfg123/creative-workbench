@@ -65,6 +65,13 @@ class ChapterFileStore(context: Context) {
         return file
     }
 
+    /** 读一份快照文件（恢复历史用）。 */
+    fun readSnapshotFile(path: String): ChapterContent? = runCatching {
+        val file = File(path)
+        if (!file.exists()) return null
+        json.decodeFromString<ChapterContent>(file.readText(Charsets.UTF_8))
+    }.getOrNull()
+
     fun deleteSnapshot(path: String) {
         runCatching { File(path).delete() }
     }
