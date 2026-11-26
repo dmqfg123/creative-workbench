@@ -406,6 +406,20 @@ class BodyEditText(context: Context) : EditText(context) {
     private var selectionPanPointerId = -1
     private var selectionPanLastY = 0f
 
+    /**
+     * 选区激活时「拖正文 = 滚屏」。
+     *
+     * 为什么双指那条路上不去：长按后按住的是**选择手柄（独立的 HandleView）**，
+     * 第一根手指的事件根本不进 EditText；第二根手指落到正文时，对 EditText 来说是一次
+     * 全新的 ACTION_DOWN（不是 POINTER_DOWN），所以「双指」分支永远等不到。
+     * 结论：选区激活时，正文上任何一个拖动都应当解释成滚动，而不是挪光标/取消选区。
+     */
+    private var selectionPanConsumed = false
+    private var selectionPanStartY = 0f
+    /** 按下前就存在的选区：TextView 会在 DOWN 时清掉它，这里记住再恢复。 */
+    private var keepSelectionStart = -1
+    private var keepSelectionEnd = -1
+
     private fun hasTextSelection(): Boolean = selectionStart != selectionEnd
 
     private val flingRunnable = object : Runnable {
@@ -449,6 +463,17 @@ class BodyEditText(context: Context) : EditText(context) {
                 gestureDownY = event.y
                 gestureDragged = false
                 selectionPanPointerId = -1
+                selectionPanConsumed = false
+                selectionPanStartY = event.y
+                keepSelectionStart = if (hasTextSelection()) selectionStart else -1
+                keepSelectionEnd = selectionEnd
+                val handled = super.onTouchEvent(event)
+                // TextView 在 ACTION_DOWN 就把选区清了；先恢复，等抬手时再决定是不是真的结束。
+                // 不恢复的话，第二根手指刚落下选区就没了——「另一根手指滚屏」永远无从谈起。
+                if (keepSelectionStart >= 0 && !hasTextSelection()) {
+                    setSelection(keepSelectionStart, keepSelectionEnd)
+                }
+                return handled
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 // 已经有选区时，第二根手指 = 滚动窗口（不参与选择）
@@ -460,6 +485,7 @@ class BodyEditText(context: Context) : EditText(context) {
                 }
             }
             MotionEvent.ACTION_MOVE -> {
+                // 双指同时落在正文上时，按第二根指针滚
                 if (selectionPanPointerId >= 0) {
                     val index = event.findPointerIndex(selectionPanPointerId)
                     if (index >= 0) {
@@ -471,6 +497,22 @@ class BodyEditText(context: Context) : EditText(context) {
                         }
                     }
                 }
+                // 选区激活 + 拖动正文 = 滚屏（不挪光标、不取消选区，交给上面那支手指继续按住手柄）
+                if (!selectionPanConsumed && (keepSelectionStart >= 0 || hasTextSelection()) &&
+                    kotlin.math.abs(event.y - selectionPanStartY) > touchSlop
+                ) {
+                    selectionPanConsumed = true
+                    selectionPanLastY = event.y
+                }
+                if (selectionPanConsumed) {
+                    val dy = (selectionPanLastY - event.y).toInt()
+                    if (dy != 0) {
+                        scrollBy(0, dy)
+                        selectionPanLastY = event.y
+                    }
+                    // 不再交给 TextView：它会把这次移动解释成挪光标/取消选区
+                    return true
+                }
                 velocityTracker.addMovement(event)
                 if (kotlin.math.abs(event.y - gestureDownY) > touchSlop) gestureDragged = true
             }
@@ -480,6 +522,12 @@ class BodyEditText(context: Context) : EditText(context) {
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (selectionPanConsumed) {
+                    selectionPanConsumed = false
+                    velocityTracker.clear()
+                    gestureDragged = false
+                    return true
+                }
                 // 选择状态下的拖动是在调选区，松手不该甩动页面
                 if (gestureDragged && !hasTextSelection()) {
                     velocityTracker.addMovement(event)
@@ -491,6 +539,8 @@ class BodyEditText(context: Context) : EditText(context) {
                 velocityTracker.clear()
                 gestureDragged = false
                 selectionPanPointerId = -1
+                keepSelectionStart = -1
+                keepSelectionEnd = -1
             }
         }
         return super.onTouchEvent(event)
