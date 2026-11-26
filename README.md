@@ -1,67 +1,65 @@
-# 创作工作台
+# 创作工作台（雨刮模拟器）
 
-个人 Android 写作 App（launcher 名《雨刮模拟器》）：手机原生、AI 辅助、数据只存本机。
+> 一个个人自用的 Android 长篇小说写作 App：以 AI 辅助为核心，数据只存本机。
+> 单机 · 无账号 · 无云同步 · GPL-3.0
 
-## 状态
+[![Android CI](https://github.com/USER/creative-workbench/actions/workflows/android.yml/badge.svg)](https://github.com/USER/creative-workbench/actions)
 
-- 版本：**0.12.0**（versionCode 24，tag `v0.12.0`）；S1–S5 全部落地。
-- 0.12.0 内容：AI 输出质量修复（续写/改写去 `[[bN]]` 标记、温度 1.5→1.2、按目标字数限输出）+ 续写长度/引用设定勾选/结果可编辑 + 换章侧栏 + 返回首页 + 去掉滚动吸附。
-- 0.11.x：使用反馈整改 + 审查修复 30 项（导入两段式、journal layout、缺文件抢救、冲突自愈）。
-- 真机：release **3.60 MB** 已装 Redmi Note 11 5G（Android 13）；AI 续写 300 字实测 246 tokens / 约 250 字 / ¥0.0058，无污染标记。
-- 构建：AGP 8.5.2 / Gradle 8.9 / Kotlin 2.0.21 / compileSdk 34 / minSdk 29；release 已开 R8。
-- APK：release **3.57 MB** / debug 27.6 MB；多次覆盖安装数据保留。
-- 单测：**96 条全通过**（`gradlew testReleaseUnitTest`）。
-- 性能：0.11.0 冷启动 411–437 ms；0.10.0 的 30 章基线（359–368 ms / PSS 53.7 MB / 滚动 0% jank / 输入 p95 12 ms）保留对照。
-- 验收：22 条 AC 18 通过 / 4 部分 / 0 未验（见 项目\验收\AC状态_20261124.md）。
+## 它是什么
+
+写给「一个人写长篇，需要一个能记住设定、能调 AI、又不把稿子传到别人服务器」的作者。
+
+- **正文编辑器**：整章一个 EditText（一个 Editable），支持撤销/重做、段落上移下移/新建/删除、光标位置记忆、滑动惯性、长按选中后另一根手指继续滚屏。
+- **AI 面板**：续写 / 改写 / 扩写 / 本章摘要 / 检查。设定（人物、世界观、伏笔）按「是否被这一章提到」**自动挑选**，也可手动勾选；四档模式（自动 / 全部 / 手动 / 关闭），偏好落盘。
+- **AI 对话**：多轮、可联网检索；通过 **13 个工具**读写项目（查大纲、读/写章节、建笔记、改大纲、查伏笔……）。所有写操作先出**提案**，点「应用」才落库。
+- **笔记**：六类（速记/人物/设定/灵感/片段），别名、标签、生效章节、AI 参考开关、交叉索引（提到 / 被提到）。
+- **大纲**：绑定章节、目标字数、模板、结构诊断、反向大纲。
+- **伏笔账本**：埋章 / 计划回收 / 实收章，未回收提醒。
+- **文本导入**：粘贴或选 txt，按章切分 → AI 抽取设定 → 勾选入库（支持中文「第N章」、英文 Chapter、数字/中文序号标题）。
+- **数据**：Room + 章节 JSON 文件 + journal 崩溃回放；整包备份/恢复；本章历史（每 5 分钟自动快照，可回滚）。
+
+## 技术栈
+
+Kotlin · Jetpack Compose · 单 Activity · Room（v3）· OkHttp + SSE 流式 · kotlinx.serialization · 无第三方 UI 框架。
+DeepSeek Chat Completions（含 thinking / 工具调用 / JSON 模式），也兼容任何 OpenAI 兼容端点与本机 Ollama。
 
 ## 构建
 
-需要 JDK 17 + Android SDK 34。开发机用固定工具链，走 DSH 的 build_android_apk：
+需要 JDK 17、Android SDK Platform 34、Build-Tools 34.0.0。
 
-~~~text
-build_android_apk(
-  project="E:/AIbendi/work/creative-workbench",
-  variant="release",
-  downloadDir="E:/AIbendi/work/android-toolchain",
-  apkOutputDir="E:/AIbendi/work/creative-workbench/apk"
-)
+~~~bash
+git clone https://github.com/USER/creative-workbench.git
+cd creative-workbench
+# 把 SDK 路径写进 local.properties（不要提交）
+echo "sdk.dir=/path/to/Android/Sdk" > local.properties
+./gradlew :app:testDebugUnitTest :app:assembleRelease
 ~~~
 
-命令行等价（Windows 下必须显式给这三个环境变量，否则 gradlew 会去中文用户目录找工作目录而失败）：
+产物：app/build/outputs/apk/release/app-release.apk（release 用你自己的 keystore 签名，见 app/build.gradle.kts）。
 
-~~~powershell
-$env:JAVA_HOME="E:\AIbendi\work\android-toolchain\jdk\jdk-17.0.21.1+2"
-$env:ANDROID_HOME="E:\AIbendi\work\android-toolchain\android-sdk"
-$env:GRADLE_USER_HOME="E:\AIbendi\work\android-toolchain\gradle-user-home"
-.\gradlew.bat :app:assembleRelease
-~~~
+## 使用前
 
-项目带 Gradle wrapper（8.9）。签名用项目内 keystore/debug.keystore（固定，自用，非发布签名）；新克隆没有该文件时回退到系统 debug keystore —— 那会导致覆盖安装失败，先补 keystore。
+1. 侧载安装 APK。
+2. 更多 → AI 助手，填 Base URL 与 API Key（只存本机 secure 存储，不进备份、不进日志）。
+3. 建作品 → 写第一章。
 
-## 结构
+## 设计取向（为什么这么写）
+
+- **默认不给模型加任何指令**：不加人设、不限题材，提示词前缀保持稳定以命中缓存；模型拒写时自动重试一次。
+- **AI 不能绕过作者改数据**：所有写操作 = 提案 + 二次确认；正文写入带 revision 校验。
+- **本地优先**：无云、无账号；备份是单文件（可含或不含密钥）。
+- **一块编辑面**：正文只有一个 Editable，避免分段编辑器在输入法、撤销、选区上的长期坑。
+
+## 目录
 
 ~~~text
 app/src/main/java/com/creativeworkbench/writer/
-  core/data        Room 实体/DAO/数据库、章节文件、journal、revision、快照
-  core/editor      EditCommand / EditEngine / 续位
-  core/ai          动作与提示词、上下文装配（SettingInjector/PromptBudget）、JSON 容错、usage 记账、动作包（PackArchive）
-  core/backup      备份包、迁移包 zip、每日备份、崩溃日志
-  core/nav         模块注册表（唯一可关模块：设定笔记）
-  core/settings    主题/字号/模块开关
-  ui/              书架 / 目录 / 笔记 / 更多 / 分块编辑器（EditText）
-app/schemas/       Room schema（升级时必须写 Migration）
+├── core/        数据（Room/文件/journal）、AI（客户端/上下文/工具/检索）、备份、设置
+├── ui/          编辑器、书架、笔记、大纲、AI 面板与对话、导入、设置
+└── MainActivity.kt
+app/src/test/    124 条单元测试
 ~~~
 
-产品文档（PRD v4.0、决策记录、工作流、验收、复盘）在 `E:\AIbendi\文学创作平台项目`，与代码仓库分开。
+## 许可证
 
-## 设计约束
-
-- 书架与 AI 在内核，不可关；唯一可关模块是「设定笔记」。
-- 不做运行时插件；导入包只含 AI 动作与提示词。
-- 每章 revision；首行缩进用 paddingStart；block 只有 {id, text}。
-- 正文用 EditText 分块编辑器（同一时刻只有一段可编辑），不用 Compose TextField。
-- release 开 R8；自家类名与行号保留（崩溃日志可读），库类名还原用 `apk/mapping_*.txt`。
-
-## License
-
-GPL-3.0，见 LICENSE。
+GPL-3.0（见 LICENSE）。个人作品请自留备份；本项目不对 AI 生成内容的版权做任何主张。
