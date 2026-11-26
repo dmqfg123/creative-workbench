@@ -2,6 +2,27 @@
 
 # CHANGELOG
 
+## 0.18.11（2026-11-26）AI 设置页隐藏「自动套用」参数卡片
+
+用户要求那块「自动套用 · 上下文窗口 / 单次输出上限 / temperature / 超时」不要显示。
+**只隐藏显示、不删代码**：AutoParamsCard / ParamLine / formatTokens 保留，调用处注释并写明如何恢复。
+（0.18.10 曾把代码删掉，按用户澄清已恢复。）
+真机确认：设置页已无「自动套用」字样。
+
+## 0.18.9（2026-11-26）导入酒馆（SillyTavern）预设
+
+设置 → AI 助手 → 「导入酒馆预设」，按模型 id 保存三块：
+- 系统提示：prompts 里 main/system_prompt/jailbreak/nsfw，按 prompt_order 排序；
+- post_history_instructions：拼到最后一条 user 之后；
+- assistant_prefill：作为最后一条 assistant 发出，编辑器输出自动去重。
+StPresetParser 兼容 prompts 数组 / settings.json 的 openai_settings / 旧版平铺字段；4 条单测。
+不导入世界书/角色卡/正则，也不读预设里的 temperature/top_p（参数按模型自动给）。
+
+## 0.18.8（2026-11-26）按模型定制提示词
+
+设置 → AI 助手 → 「当前模型的提示词」：按模型 id 分开存、默认空、可一键填入 5C 极简模板
+（Character/Cause/Constraint/Contingency/Calibration，arXiv 2507.07045）。编辑器与对话窗口共用。
+
 ## 0.18.7（2026-11-26）本机模型入口（Ollama）
 
 设置 → AI 助手 → 接口新增「本机模型（Ollama）」chip：

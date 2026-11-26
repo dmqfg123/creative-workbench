@@ -320,11 +320,10 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                 )
             }
 
-            Spacer(Modifier.height(10.dp))
-
-            AutoParamsCard(
-                config = currentConfig()
-            )
+            // 参数卡片「自动套用 · 上下文窗口 / 输出上限 / temperature / 超时」不在界面上显示
+            // （用户反馈：参数是自动推导的、改不了，摊开只是噪音）。代码保留，需要时取消下面两行注释。
+            // Spacer(Modifier.height(10.dp))
+            // AutoParamsCard(config = currentConfig())
 
             Spacer(Modifier.height(12.dp))
             Surface(
