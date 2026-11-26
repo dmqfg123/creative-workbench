@@ -2,6 +2,13 @@
 
 # CHANGELOG
 
+## 0.19.2（2026-11-26）撤掉「高刷新率」开关
+
+0.19.1 曾在设置里加了 90Hz 开关（window.preferredRefreshRate）。用户指出：刷新率是系统级设置，
+真想要会自己在手机里改，App 不该抢这个开关。已整体移除（设置项、Activity 里的 window 属性、ViewModel、SettingsRepository）。
+
+## 0.19.1（2026-11-26）高刷新率开关（已在 0.19.2 撤销）
+
 ## 0.19.0（2026-11-26）全面适配 DeepSeek v4.1
 
 依据官方 Chat Completions 文档（v4.1）：

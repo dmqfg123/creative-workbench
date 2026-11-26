@@ -140,6 +140,7 @@ fun MoreScreen(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+
             }
 
             SectionLabel("关于")
