@@ -345,7 +345,7 @@ fun NoteDetailScreen(
                         active = note.fromChapterId == null,
                         onClick = { viewModel.setFromChapter(null) }
                     )
-                    state.chapters.take(30).forEachIndexed { index, chapter ->
+                    state.chapters.forEachIndexed { index, chapter ->
                         Tag(
                             (index + 1).toString() + " 章",
                             active = note.fromChapterId == chapter.id,

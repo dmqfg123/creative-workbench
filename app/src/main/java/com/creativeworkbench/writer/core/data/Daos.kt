@@ -97,6 +97,9 @@ interface NoteDao {
     @Query("UPDATE notes SET workId = NULL, updatedAtMs = :now WHERE workId = :workId")
     suspend fun detachFromWork(workId: String, now: Long)
 
+    @Query("UPDATE notes SET fromChapterId = NULL WHERE fromChapterId = :chapterId")
+    suspend fun clearChapterEffect(chapterId: String)
+
     @Query("DELETE FROM notes WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<String>)
 
@@ -159,6 +162,15 @@ interface ForeshadowingDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(item: ForeshadowingEntity)
+
+    @Query("UPDATE foreshadowing SET plantedChapterId = NULL WHERE plantedChapterId = :chapterId")
+    suspend fun clearPlanted(chapterId: String)
+
+    @Query("UPDATE foreshadowing SET dueChapterId = NULL WHERE dueChapterId = :chapterId")
+    suspend fun clearDue(chapterId: String)
+
+    @Query("UPDATE foreshadowing SET paidChapterId = NULL WHERE paidChapterId = :chapterId")
+    suspend fun clearPaid(chapterId: String)
 
     @Query("DELETE FROM foreshadowing WHERE id = :id")
     suspend fun delete(id: String)

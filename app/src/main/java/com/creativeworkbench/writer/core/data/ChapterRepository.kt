@@ -118,6 +118,19 @@ class ChapterRepository(
         }
     }
 
+    /**
+     * 只读拿正文：回放 journal，但**不写文件、不升 revision、不清 journal**。
+     * AI 装配上下文、笔记「出现位置」扫描这类只读路径必须用它——
+     * 否则每读一次就会把正在编辑的那一章的 revision 推高，逼出保存冲突。
+     */
+    suspend fun readBlocksForContext(chapterId: String): List<Block>? = withContext(Dispatchers.IO) {
+        writeMutex.withLock {
+            val content = runCatching { files.read(chapterId) }.getOrNull() ?: return@withLock null
+            val records = runCatching { files.readJournal(chapterId) }.getOrDefault(emptyList())
+            if (records.isEmpty()) content.blocks else JournalReplay.apply(content.blocks, records)
+        }
+    }
+
     suspend fun openChapter(chapterId: String): OpenedChapter? =
         (openChapterResult(chapterId) as? OpenChapterResult.Ok)?.opened
 
@@ -340,6 +353,12 @@ class ChapterRepository(
             files.deleteSnapshots(chapterId)
             // 快照行也要删：只删文件会留下孤儿行，count() 虚高会让 200 上限提前淘汰有效快照
             db.snapshotDao().deleteByChapter(chapterId)
+            // 关联数据不能留幽灵：绑在这一章的大纲节点、伏笔的三个章节引用、笔记的「生效章节」
+            runCatching { db.outlineDao().deleteByChapter(chapterId) }
+            runCatching { db.foreshadowingDao().clearPlanted(chapterId) }
+            runCatching { db.foreshadowingDao().clearDue(chapterId) }
+            runCatching { db.foreshadowingDao().clearPaid(chapterId) }
+            runCatching { db.noteDao().clearChapterEffect(chapterId) }
             lastWrittenOrder.remove(chapterId)
         }
     }

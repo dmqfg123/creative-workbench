@@ -29,7 +29,15 @@
 - 从笔记/大纲进编辑器再返回只退一层；伏笔删除与对话清空补确认。
 - 体验：共享 OkHttpClient、笔记搜索含别名、笔记/大纲列表记忆滚动位置、AI 面板生成后自动滚到结果、对话记录落盘、导入支持英文/数字章节标题并提示截断。
 
-**已知未修（1.0.x）**：导入原子性、openChapter 写副作用、删章关联清理、导入 chapterId 校验、旧分块编辑器死代码、章节选择器上限、部分 UI 可达性细节、若干单测缺口。详见项目文档 参考/1.0验收_20261126.md。
+**1.0.0 最终版补修（原列的 1.0.x 项已全部完成）**
+- 导入原子性：换名前留 .bak，DB 事务失败整章回滚；章节 id 必须 UUID（防路径穿越）。
+- 新增 readBlocksForContext：AI 装配/笔记扫描/工具读章节不再触发 journal 落盘与 revision 上升。
+- 删章清理关联（大纲节点/伏笔三处引用/笔记生效章）；clearAll 补 foreshadowing 表与 snapshots 根目录。
+- 章节选择器去掉 20/30 上限；搜索框自动聚焦。
+- 删除旧分块编辑器死代码（ActiveBlockEditor/BlockEditText/InactiveBlock/alignFocusedBlock/FocusedBlockScroll 及其单测），EditorScreen 少 175 行。
+- 新增 RefusalGuardTest 与中英/数字/中文序号分章测试。
+
+**仍留 1.0.1**：触摸目标、insets 双计、主题对比度、长列表 O(n^2)、流式抢滚动等 UI 细节；EditorViewModel/ContextBuilder/BackupService 的单测与 androidTest。
 
 ## 0.19.3（2026-11-26）AI 对话记录落盘
 

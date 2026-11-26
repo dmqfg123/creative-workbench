@@ -72,6 +72,12 @@ class ChapterFileStore(context: Context) {
     fun deleteSnapshots(chapterId: String) {
         runCatching { File(snapshotsDir, chapterId).deleteRecursively() }
     }
+
+    /** 清空全部快照（clearAll 用）：整棵目录删掉，别留空壳。 */
+    fun deleteAllSnapshots() {
+        runCatching { snapshotsDir.deleteRecursively() }
+        runCatching { snapshotsDir.mkdirs() }
+    }
     fun journalFile(chapterId: String): File = File(chaptersDir, chapterId + ".journal")
     fun backupFile(chapterId: String): File = File(chaptersDir, chapterId + ".json.bak")
 
@@ -157,9 +163,28 @@ class ChapterFileStore(context: Context) {
         val tmp = File(chaptersDir, chapterId + ".json.import")
         if (!tmp.exists()) return
         val target = contentFile(chapterId)
+        // 换名之前先把旧正文留成 .bak：DB 事务失败时能整章回滚
+        if (target.exists()) runCatching { target.renameTo(backupFile(chapterId)) }
         if (!tmp.renameTo(target)) {
             tmp.copyTo(target, overwrite = true)
             tmp.delete()
+        }
+        fsyncDir(chaptersDir)
+    }
+
+    /** 导入的 DB 事务失败时：把 .bak 换回正式文件（没有 .bak 说明是新增章，删掉即可）。 */
+    fun rollbackImport(chapterIds: Collection<String>) {
+        chapterIds.forEach { chapterId ->
+            runCatching {
+                val target = contentFile(chapterId)
+                val backup = backupFile(chapterId)
+                if (backup.exists()) {
+                    target.delete()
+                    backup.renameTo(target)
+                } else {
+                    target.delete()
+                }
+            }
         }
         fsyncDir(chaptersDir)
     }

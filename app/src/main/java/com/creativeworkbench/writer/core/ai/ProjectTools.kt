@@ -213,9 +213,9 @@ class ProjectTools(
 
     private suspend fun readChapter(ref: String): ToolOutcome {
         val chapter = resolveChapter(ref) ?: return ToolOutcome.Failure("找不到章节：" + ref)
-        val opened = chapters.openChapter(chapter.id)
+        val blocks = chapters.readBlocksForContext(chapter.id)
             ?: return ToolOutcome.Failure("这一章打不开（文件缺失或损坏）：" + chapter.title)
-        val text = opened.content.blocks.joinToString("\n") { it.text }
+        val text = blocks.joinToString("\n") { it.text }
         val index = chapters.chapters(workId!!).indexOfFirst { it.id == chapter.id } + 1
         if (text.isBlank()) return ToolOutcome.Data("第 " + index + " 章「" + chapter.title + "」还没有正文。")
         val clipped = text.take(MAX_READ_CHARS)

@@ -589,7 +589,7 @@ private fun ForeshadowDialog(
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    chapters.take(20).forEachIndexed { index, chapter ->
+                    chapters.forEachIndexed { index, chapter ->
                         Tag(
                             (index + 1).toString() + " 章",
                             active = planted == chapter.id,
@@ -603,7 +603,7 @@ private fun ForeshadowDialog(
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    chapters.take(20).forEachIndexed { index, chapter ->
+                    chapters.forEachIndexed { index, chapter ->
                         Tag(
                             (index + 1).toString() + " 章",
                             active = due == chapter.id,
@@ -670,7 +670,7 @@ private fun OutlineEditorDialog(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Tag("全书", active = chapterId == null, onClick = { chapterId = null })
-                    chapters.take(30).forEachIndexed { index, chapter ->
+                    chapters.forEachIndexed { index, chapter ->
                         Tag(
                             (index + 1).toString() + " 章",
                             active = chapterId == chapter.id,

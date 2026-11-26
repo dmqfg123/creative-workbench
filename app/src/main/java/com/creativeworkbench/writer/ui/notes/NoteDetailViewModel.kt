@@ -74,8 +74,9 @@ class NoteDetailViewModel(
             val chapters = _state.value.chapters
             val found = mutableListOf<Pair<com.creativeworkbench.writer.core.data.ChapterEntity, Int>>()
             chapters.forEach { chapter ->
-                val opened = runCatching { chapterRepository.openChapter(chapter.id) }.getOrNull() ?: return@forEach
-                val text = com.creativeworkbench.writer.core.data.MentionIndex.textOf(opened.content.blocks)
+                val blocks = runCatching { chapterRepository.readBlocksForContext(chapter.id) }.getOrNull()
+                    ?: return@forEach
+                val text = com.creativeworkbench.writer.core.data.MentionIndex.textOf(blocks)
                 val count = com.creativeworkbench.writer.core.data.MentionIndex.countIn(note, text)
                 if (count > 0) found.add(chapter to count)
             }

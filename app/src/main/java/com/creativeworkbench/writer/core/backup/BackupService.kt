@@ -259,6 +259,14 @@ class BackupService(
             // 先备份当前数据，失败就中止
             writeLocalBackup()
 
+            // 0) 章节 id 必须是 UUID：它会直接拼进文件名，包里塞个 ../../x 就能写到目录外
+            val badIds = bundle.chapters.filter {
+                runCatching { UUID.fromString(it.id) }.isFailure
+            }
+            if (badIds.isNotEmpty()) {
+                return@withContext ImportResult.Error("备份里有非法章节 id：" + badIds.take(3).joinToString("、") { it.id })
+            }
+
             // 1) 章节正文先写 .import 暂存：这一步失败，数据库还没动，原数据完整
             bundle.chapters.forEach { chapter ->
                 chapterFiles.writeImport(
@@ -297,8 +305,10 @@ class BackupService(
             // 表现就是「点恢复成功、打开还是老内容」。这里必须一起清。
             bundle.chapters.forEach { chapterFiles.clearJournal(it.id) }
 
-            // 4) 数据库整包替换在一个事务里：任一条失败自动回滚
-            db.withTransaction {
+            // 4) 数据库整包替换在一个事务里：任一条失败自动回滚。
+            //    事务失败时，文件已经换成新的了 —— 用 commitImport 留下的 .bak 整章回滚。
+            val transactionFailure = runCatching {
+                db.withTransaction {
                 db.noteDao().deleteAll()
                 db.outlineDao().deleteAll()
                 db.foreshadowingDao().deleteAll()
@@ -386,6 +396,14 @@ class BackupService(
                         )
                     )
                 }
+            }
+            }.exceptionOrNull()
+            if (transactionFailure != null) {
+                chapterFiles.rollbackImport(bundle.chapters.map { it.id })
+                return@withContext ImportResult.Error(
+                    "数据库写入失败：" + (transactionFailure.message ?: "未知错误") +
+                        "；章节文件已回滚到导入前，原数据未被覆盖"
+                )
             }
 
             chapterFiles.deleteOtherThan(bundle.chapters.map { it.id }.toSet())
@@ -598,9 +616,13 @@ class BackupService(
                 db.workDao().delete(work.id)
             }
             chapterFiles.deleteOtherThan(emptySet())
+            // 快照根目录也要整棵删：只删章节文件会留下 snapshots/<id>/ 空目录与残留
+            chapterFiles.deleteAllSnapshots()
             db.snapshotDao().deleteAll()
             db.noteDao().deleteAll()
             db.outlineDao().deleteAll()
+            // 以前漏了伏笔表：清空后「未回收伏笔」还会从幽灵数据里冒出来
+            db.foreshadowingDao().deleteAll()
             historyStore.clear()
         }
     }

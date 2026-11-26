@@ -142,8 +142,9 @@ class AiContextBuilder(
         val currentIndex = chapterList.indexOfFirst { it.id == chapterId }
         val prevChapter = if (currentIndex > 0) chapterList[currentIndex - 1] else null
         val prevTail = prevChapter?.let { prev ->
+            // 只读：不能因为装配上下文就把别人正在写的那一章 revision 推高
             runCatching {
-                chapters.openChapter(prev.id)?.content?.blocks?.joinToString("\n") { it.text }
+                chapters.readBlocksForContext(prev.id)?.joinToString("\n") { it.text }
             }.getOrNull()?.takeLast(500).orEmpty()
         }.orEmpty()
 

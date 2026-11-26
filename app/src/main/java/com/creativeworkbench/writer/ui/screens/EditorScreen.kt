@@ -150,10 +150,7 @@ import com.creativeworkbench.writer.ui.editor.BodyEditor
 import com.creativeworkbench.writer.ui.editor.BodyEditorController
 import com.creativeworkbench.writer.ui.editor.EditorViewModel
 import com.creativeworkbench.writer.ui.editor.EditorViewModelFactory
-import com.creativeworkbench.writer.ui.editor.FocusScrollTarget
 import com.creativeworkbench.writer.ui.editor.MergedBlock
-import com.creativeworkbench.writer.ui.editor.VisibleBlockBounds
-import com.creativeworkbench.writer.ui.editor.focusedBlockScrollTarget
 import com.creativeworkbench.writer.ui.theme.Motion
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -832,38 +829,6 @@ fun EditorScreen(
     }
 }
 
-/**
- * 把正在编辑的那一段对齐到可视区。
- * 大跳用 scrollToItem 直接定位段首（delta 累加 + 动画会越滚越远），小位移才做动画。
- */
-private suspend fun alignFocusedBlock(
-    listState: androidx.compose.foundation.lazy.LazyListState,
-    lazyIndex: Int,
-    bottomMarginPx: Int
-) {
-    val info = listState.layoutInfo
-    if (info.visibleItemsInfo.isEmpty()) return
-    val available = (info.viewportEndOffset - info.viewportStartOffset).coerceAtLeast(1)
-    val target = focusedBlockScrollTarget(
-        focusedIndex = lazyIndex,
-        visibleItems = info.visibleItemsInfo.map { item ->
-            VisibleBlockBounds(item.index, item.offset, item.size)
-        },
-        viewportStartOffset = info.viewportStartOffset,
-        viewportEndOffset = info.viewportEndOffset,
-        bottomMarginPx = bottomMarginPx
-    )
-    when (target) {
-        is FocusScrollTarget.By ->
-            if (kotlin.math.abs(target.deltaPx) > available / 3) {
-                listState.scrollToItem(lazyIndex, 0)
-            } else {
-                listState.animateScrollBy(target.deltaPx.toFloat())
-            }
-        is FocusScrollTarget.ToItem -> listState.scrollToItem(target.index, target.scrollOffset)
-        null -> Unit
-    }
-}
 
 /** 调试用帧率显示：每 500ms 统计一次实际渲染帧数，默认关。 */
 @Composable
@@ -1031,42 +996,6 @@ private fun EditorHeader(
     }
 }
 
-@Composable
-private fun InactiveBlock(
-    block: Block,
-    textSizeSp: Float,
-    lineHeightSp: Float,
-    onActivate: (Int) -> Unit
-) {
-    var layout by remember(block.id) { mutableStateOf<TextLayoutResult?>(null) }
-    val interaction = remember { MutableInteractionSource() }
-    val text = block.text.ifBlank { " " }
-    Text(
-        text = text,
-        onTextLayout = { layout = it },
-        modifier = Modifier
-            .fillMaxWidth()
-            .indication(interaction, androidx.compose.material3.ripple())
-            .pointerInput(block.id) {
-                detectTapGestures(
-                    onPress = { offset: androidx.compose.ui.geometry.Offset ->
-                        val press = PressInteraction.Press(offset)
-                        interaction.emit(press)
-                        val released = tryAwaitRelease()
-                        interaction.emit(
-                            if (released) PressInteraction.Release(press) else PressInteraction.Cancel(press)
-                        )
-                    }
-                ) { position ->
-                    onActivate(layout?.getOffsetForPosition(position) ?: 0)
-                }
-            }
-            .padding(vertical = 6.dp),
-        style = MaterialTheme.typography.bodyLarge.copy(fontSize = textSizeSp.sp, lineHeight = lineHeightSp.sp),
-        color = if (block.text.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-        else MaterialTheme.colorScheme.onSurface
-    )
-}
 
 /**
  * 删段落的撤销条。0.12 用的是 Snackbar，压在键盘上沿的工具条和正文之间，
@@ -1293,159 +1222,6 @@ private fun NotesDrawer(
     }
 }
 
-@Composable
-private fun ActiveBlockEditor(
-    block: Block,
-    cursorOffset: Int,
-    onTextChange: (String) -> Unit,
-    onSplitAt: (Int) -> Unit,
-    onMergePrevious: () -> MergedBlock?,
-    onAiRewrite: (text: String, start: Int, end: Int) -> Unit,
-    textSizeSp: Float,
-    lineHeightSp: Float,
-    maxHeight: Dp,
-    modifier: Modifier
-) {
-    val context = LocalContext.current
-    val textColor = MaterialTheme.colorScheme.onSurface.toArgb()
-    val onTextChangeState = rememberUpdatedState(onTextChange)
-    val onSplitAtState = rememberUpdatedState(onSplitAt)
-    val onMergeState = rememberUpdatedState(onMergePrevious)
-    val onAiRewriteState = rememberUpdatedState(onAiRewrite)
-
-    val editText = remember(block.id, textSizeSp, lineHeightSp) {
-        BlockEditText(context).apply {
-            setBackgroundColor(AndroidColor.TRANSPARENT)
-            setPadding(0, 0, 0, 0)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-            imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp)
-            // 主题里正文是 Serif，EditText 默认是 sans：不显式设字体，点进段落的一瞬间字会变体
-            typeface = android.graphics.Typeface.SERIF
-            setLineSpacing(0f, lineHeightSp / textSizeSp)
-            gravity = Gravity.TOP or Gravity.START
-            isVerticalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
-            setTextColor(textColor)
-            setText(block.text)
-            setSelection(text.length)
-            // 收起键盘后再点正文（段落还是活动状态）也要能把输入法叫回来
-            setOnClickListener { showSoftKeyboard(this) }
-            customSelectionActionModeCallback = object : ActionMode.Callback {
-                override fun onCreateActionMode(mode: ActionMode?, menu: Menu?): Boolean {
-                    menu?.add(0, MENU_AI_REWRITE, 0, "AI 改写")
-                        ?.setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
-                    return true
-                }
-
-                override fun onPrepareActionMode(mode: ActionMode?, menu: Menu?): Boolean = false
-
-                override fun onActionItemClicked(mode: ActionMode?, item: MenuItem?): Boolean {
-                    if (item?.itemId != MENU_AI_REWRITE) return false
-                    val start = selectionStart
-                    val end = selectionEnd
-                    if (start in 0 until end && end <= text.length) {
-                        onAiRewriteState.value(text.substring(start, end), start, end)
-                    }
-                    mode?.finish()
-                    return true
-                }
-
-                override fun onDestroyActionMode(mode: ActionMode?) = Unit
-            }
-        }
-    }
-
-    DisposableEffect(editText) {
-        val watcher = object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
-            override fun afterTextChanged(s: Editable?) {
-                if (editText.suppress.get()) return
-                val inputAtNanos = android.os.SystemClock.elapsedRealtimeNanos()
-                // 输入到下一帧的耗时：只在 debug 打点；release 每敲一个字都写 logcat 会拖慢输入。
-                if (com.creativeworkbench.writer.BuildConfig.DEBUG) {
-                    editText.postOnAnimation {
-                        android.util.Log.i(
-                            "WB_PERF",
-                            "input_ms=" + ((android.os.SystemClock.elapsedRealtimeNanos() - inputAtNanos) / 1_000_000.0)
-                        )
-                    }
-                }
-                val text = s?.toString().orEmpty()
-                val newline = text.indexOf('\n')
-                if (newline >= 0) {
-                    editText.suppress.set(true)
-                    s?.delete(newline, newline + 1)
-                    editText.suppress.set(false)
-                    onSplitAtState.value(newline)
-                } else {
-                    onTextChangeState.value(text)
-                }
-            }
-        }
-        editText.addTextChangedListener(watcher)
-        editText.onBackspaceAtStart = { onMergeState.value() }
-        editText.setOnKeyListener { _, keyCode, event ->
-            if (event.action != KeyEvent.ACTION_DOWN) {
-                false
-            } else if (keyCode == KeyEvent.KEYCODE_ENTER && !event.isShiftPressed) {
-                onSplitAtState.value(editText.selectionStart.coerceAtLeast(0))
-                true
-            } else if (keyCode == KeyEvent.KEYCODE_DEL &&
-                editText.selectionStart == 0 &&
-                editText.selectionEnd == 0
-            ) {
-                val merged = onMergeState.value()
-                if (merged != null) {
-                    editText.applyMerge(merged)
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-        }
-        onDispose {
-            editText.removeTextChangedListener(watcher)
-            editText.setOnKeyListener(null)
-            editText.onBackspaceAtStart = null
-        }
-    }
-
-    // 点一下段落就直接给焦点 + 弹输入法。只在 Compose 里 requestFocus 是不够的：
-    // 焦点有了、键盘不出来，用户就得点第二下——0.10.0 的「要连点两次」就是这么来的。
-    LaunchedEffect(block.id) {
-        delay(40)
-        editText.requestFocus()
-        editText.setSelection(cursorOffset.coerceIn(0, editText.text.length))
-        // 无条件请求输入法：回车分段会重建 EditText（新段 id 变了），
-        // 只 requestFocus 的话输入法可能已经掉了——真机上表现为「回车后打字没反应」。
-        editText.postDelayed({ showSoftKeyboard(editText) }, 60)
-    }
-    LaunchedEffect(cursorOffset) {
-        if (editText.selectionStart != cursorOffset) {
-            editText.setSelection(cursorOffset.coerceIn(0, editText.text.length))
-        }
-    }
-
-    AndroidView(
-        factory = { editText },
-        // 和未激活的 Text 对齐：那边有 6dp 上下内边距，这边不加的话点一下正文会往上跳
-        modifier = modifier.fillMaxWidth().heightIn(max = maxHeight).padding(vertical = 6.dp),
-        update = { view ->
-            if (view.text.toString() != block.text) {
-                val selection = view.selectionStart.coerceAtLeast(0)
-                view.suppress.set(true)
-                view.setText(block.text)
-                view.setSelection(selection.coerceAtMost(view.text.length))
-                view.suppress.set(false)
-            }
-            view.setTextColor(textColor)
-        }
-    )
-}
 
 /** 输入法弹出的可靠做法：窗口有焦点后 showSoftInput，SHOW_IMPLICIT 不弹候选条也能出来。 */
 private fun showSoftKeyboard(view: View) {
@@ -1460,49 +1236,6 @@ private fun showSoftKeyboard(view: View) {
  */
 private const val MENU_AI_REWRITE = 1001
 
-private class BlockEditText(context: Context) : EditText(context) {
-    /** 程序改文本时抬起来，别让 TextWatcher 把它当成用户输入再回写一遍。 */
-    val suppress = AtomicBoolean(false)
-    var onBackspaceAtStart: (() -> MergedBlock?)? = null
-
-    /**
-     * 段首退格跨段的连续删除：把上一段并进来、光标落到接缝处，**同一个 EditText 继续被长按退格**。
-     * 旧实现把活动段切到上一段的 id，EditText 被重建、输入法连接断掉，长按就停在那儿了。
-     */
-    fun applyMerge(merged: MergedBlock) {
-        suppress.set(true)
-        // 增量插入而不是整段 setText：输入法的组合状态不被打断，长按退格才不会断。
-        if (merged.prefix.isNotEmpty()) {
-            text?.insert(0, merged.prefix)
-        }
-        setSelection(merged.caret.coerceIn(0, length()))
-        suppress.set(false)
-    }
-
-    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
-        val base = super.onCreateInputConnection(outAttrs) ?: return null
-        return object : InputConnectionWrapper(base, false) {
-            override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-                if (tryBackspaceAtStart(beforeLength, afterLength)) return true
-                return super.deleteSurroundingText(beforeLength, afterLength)
-            }
-
-            override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
-                if (tryBackspaceAtStart(beforeLength, afterLength)) return true
-                return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
-            }
-
-            private fun tryBackspaceAtStart(beforeLength: Int, afterLength: Int): Boolean {
-                if (beforeLength < 1 || afterLength != 0) return false
-                if (selectionStart != 0 || selectionEnd != 0) return false
-                if (text.isNullOrEmpty()) return false
-                val merged = onBackspaceAtStart?.invoke() ?: return false
-                applyMerge(merged)
-                return true
-            }
-        }
-    }
-}
 
 /**
  * 章节面板（唯一入口）：底部弹层。
