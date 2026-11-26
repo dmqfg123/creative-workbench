@@ -5,7 +5,6 @@
 > 一个个人自用的 Android 长篇小说写作 App：以 AI 辅助为核心，数据只存本机。
 > 单机 · 无账号 · 无云同步 · GPL-3.0
 
-[![Android CI](https://github.com/dmqfg123/creative-workbench/actions/workflows/android.yml/badge.svg)](https://github.com/dmqfg123/creative-workbench/actions)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
 ## 它是什么
