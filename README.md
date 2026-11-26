@@ -5,7 +5,7 @@
 > 一个个人自用的 Android 长篇小说写作 App：以 AI 辅助为核心，数据只存本机。
 > 单机 · 无账号 · 无云同步 · GPL-3.0
 
-[![Android CI](https://github.com/ZhangShiyv/creative-workbench/actions/workflows/android.yml/badge.svg)](https://github.com/ZhangShiyv/creative-workbench/actions)
+[![Android CI](https://github.com/dmqfg123/creative-workbench/actions/workflows/android.yml/badge.svg)](https://github.com/dmqfg123/creative-workbench/actions)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
 ## 它是什么
@@ -21,6 +21,13 @@
 - **文本导入**：粘贴或选 txt，按章切分 → AI 抽取设定 → 勾选入库（支持中文「第N章」、英文 Chapter、数字/中文序号标题）。
 - **数据**：Room + 章节 JSON 文件 + journal 崩溃回放；整包备份/恢复；本章历史（每 5 分钟自动快照，可回滚）。
 
+## 下载
+
+- 安装包（4.05 MB，versionCode 101）：[release/creative-workbench-1.0.1.apk](release/creative-workbench-1.0.1.apk)
+- 也可以从 [Releases](https://github.com/dmqfg123/creative-workbench/releases) 页面下载。
+
+> 侧载安装：Android 13+，允许「安装未知来源应用」。首次启动后到「更多 → AI 助手」填 Base URL 与 API Key。
+
 ## 技术栈
 
 Kotlin · Jetpack Compose · 单 Activity · Room（v3）· OkHttp + SSE 流式 · kotlinx.serialization · 无第三方 UI 框架。
@@ -31,7 +38,7 @@ DeepSeek Chat Completions（含 thinking / 工具调用 / JSON 模式），也�
 需要 JDK 17、Android SDK Platform 34、Build-Tools 34.0.0。
 
 ~~~bash
-git clone https://github.com/ZhangShiyv/creative-workbench.git
+git clone https://github.com/dmqfg123/creative-workbench.git
 cd creative-workbench
 # 把 SDK 路径写进 local.properties（不要提交）
 echo "sdk.dir=/path/to/Android/Sdk" > local.properties
