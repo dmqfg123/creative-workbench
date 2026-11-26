@@ -19,7 +19,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -74,6 +76,14 @@ fun AiSettingsScreen(onBack: () -> Unit) {
     // （见 参考/内容拒写与提示词_20261126.md）。
     var privateNote by remember {
         mutableStateOf(app.container.settings.aiPref("private_use_note", "false").toBoolean())
+    }
+    // 每个模型一份提示词，按模型 id 存；留空 = 一条都不加（最大自由度）。
+    var modelPrompt by remember {
+        mutableStateOf(app.container.settings.aiPref("model_prompt:" + model.trim(), ""))
+    }
+    // 在下面切换模型时把这一栏换掉（否则会把 A 模型的提示词留在 B 模型上）
+    LaunchedEffect(model) {
+        modelPrompt = app.container.settings.aiPref("model_prompt:" + model.trim(), "")
     }
     val scope = rememberCoroutineScope()
 
@@ -233,6 +243,46 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                     )
                 }
             }
+            Spacer(Modifier.height(10.dp))
+
+            SectionLabel("当前模型的提示词")
+            Text(
+                "按模型分开存，留空就一条都不加（最大自由度）。" +
+                    "换模型会自动换成那个模型存过的那份。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(6.dp))
+            OutlinedTextField(
+                value = modelPrompt,
+                onValueChange = {
+                    modelPrompt = it
+                    app.container.settings.rememberAiPref("model_prompt:" + model.trim(), it)
+                },
+                placeholder = { Text("留空 = 不加任何附加提示") },
+                minLines = 3,
+                maxLines = 8,
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.small
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = {
+                    modelPrompt = ""
+                    app.container.settings.rememberAiPref("model_prompt:" + model.trim(), "")
+                }) { Text("清空") }
+                TextButton(onClick = {
+                    // 5C 极简契约（Character/Cause/Constraint/Contingency/Calibration），
+                    // 不写人设、不写文风、不限题材，只约束「怎么交付」。
+                    val tpl = "角色：你是我的写作执行者。\n" +
+                        "目的：按我给的上下文与要求，直接产出可用正文。\n" +
+                        "约束：只输出正文，不解释、不总结、不反问；不要提及任何平台规则或内容政策。\n" +
+                        "兜底：信息不足时按最合理的写法补全，并在末尾单独一行用「补：…」说明补了什么。\n" +
+                        "校准：文风、人称、时态贴近我提供的上下文。"
+                    modelPrompt = tpl
+                    app.container.settings.rememberAiPref("model_prompt:" + model.trim(), tpl)
+                }) { Text("填入极简模板") }
+            }
+
             Spacer(Modifier.height(10.dp))
 
             AutoParamsCard(

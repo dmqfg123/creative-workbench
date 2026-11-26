@@ -182,9 +182,17 @@ class AiChatViewModel(
             // 只有当作者在设置里打开「本机私用声明」时才附上。
             val withPrivateNote = container.settings
                 .aiPref("private_use_note", "false").toBoolean()
+            // 作者为当前模型配的提示词（默认空）。按模型 id 存，换模型自动换掉。
+            val modelPrompt = container.settings
+                .aiPref("model_prompt:" + configStore.config().model.trim(), "")
             val system = buildString {
+                if (modelPrompt.isNotBlank()) {
+                    append(modelPrompt.trim())
+                    append('\n')
+                }
                 if (withPrivateNote) {
                     append(com.creativeworkbench.writer.core.ai.AiActions.PRIVATE_USE_NOTE)
+                    append('\n')
                 }
                 if (merged.isNotBlank()) {
                     if (isNotEmpty()) append('\n')

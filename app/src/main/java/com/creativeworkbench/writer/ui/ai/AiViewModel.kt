@@ -137,7 +137,11 @@ class AiViewModel(
         followOutline = _state.value.followOutline,
         noteMode = _state.value.noteMode,
         autoNoteIds = _state.value.notePick?.chosen?.map { it.note.id }.orEmpty(),
-        privateUseNote = container.settings.aiPref(KEY_PRIVATE_NOTE, "false").toBoolean()
+        privateUseNote = container.settings.aiPref(KEY_PRIVATE_NOTE, "false").toBoolean(),
+        customPrompt = container.settings.aiPref(
+            "model_prompt:" + configStore.config().model.trim(),
+            ""
+        )
     )
 
     fun prepare(
