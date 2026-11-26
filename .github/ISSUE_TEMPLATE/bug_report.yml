@@ -1,0 +1,39 @@
+name: Bug 反馈
+description: 报告一个可复现的问题
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: 请先确认：已读 README，并且用最新 release 复现过。
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 设置 → 关于 里的版本号（例如 1.0.1 / versionCode 101）
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: 设备与系统
+      placeholder: 例如 Redmi Note 11 5G / Android 13 / HyperOS OS1.0
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: 1. 打开… 2. 点击… 3. 出现…
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果 vs 实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 截图（可选）
+      description: 更多 → 数据 → 导出崩溃日志，或有帮助的截图。请自行打码稿件内容。

@@ -1,0 +1,16 @@
+.gradle/
+build/
+*/build/
+.idea/
+.kotlin/
+*.iml
+local.properties
+.build-tmp/
+keystore/
+*.jks
+keystore.properties
+logs/
+apk/
+# 真机截图与临时 SQL（含真实正文/测试数据），不进库
+shots/
+*.hprof
