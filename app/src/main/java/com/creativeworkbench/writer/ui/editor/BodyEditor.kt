@@ -284,6 +284,8 @@ fun BodyEditor(
                 override fun onCreateActionMode(mode: android.view.ActionMode?, menu: android.view.Menu?): Boolean {
                     menu?.add(0, MENU_AI_REWRITE, 0, "AI 改写")
                         ?.setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_IF_ROOM)
+                    // 不收起键盘：选中之后很可能紧接着就要输入（改字/替换），
+                    // 收键盘是我之前擅自加的推断，用户没有要求这个行为。
                     return true
                 }
 
@@ -391,6 +393,21 @@ class BodyEditText(context: Context) : EditText(context) {
     private var gestureDownY = 0f
     private var gestureDragged = false
 
+    /**
+     * 选中文字后「另一根手指上下滑窗口」。
+     *
+     * 系统行为：TextView 只用一根活动指针做选择拖动，第二根手指的 MOVE 会被丢掉，
+     * 于是长按选中后只能拖手柄，不能一边选一边滚——用户反馈的就是这个。
+     * 做法：选择非空时记下第二根指针，把它的 y 位移直接转成 scrollBy；
+     * 选择锚点按字符偏移保存，滚动不会破坏选区（手柄会跟着文字走）。
+     * 参见 sora-editor 的 EditorTouchEventHandler：滚动手势与选择手势分状态处理，
+     * 选择拖动时用 scrollIfThumbReachesEdge 补滚动。
+     */
+    private var selectionPanPointerId = -1
+    private var selectionPanLastY = 0f
+
+    private fun hasTextSelection(): Boolean = selectionStart != selectionEnd
+
     private val flingRunnable = object : Runnable {
         override fun run() {
             if (flingScroller.computeScrollOffset()) {
@@ -431,13 +448,40 @@ class BodyEditText(context: Context) : EditText(context) {
                 velocityTracker.addMovement(event)
                 gestureDownY = event.y
                 gestureDragged = false
+                selectionPanPointerId = -1
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                // 已经有选区时，第二根手指 = 滚动窗口（不参与选择）
+                if (hasTextSelection()) {
+                    val index = event.actionIndex
+                    selectionPanPointerId = event.getPointerId(index)
+                    selectionPanLastY = event.getY(index)
+                    stopFling()
+                }
             }
             MotionEvent.ACTION_MOVE -> {
+                if (selectionPanPointerId >= 0) {
+                    val index = event.findPointerIndex(selectionPanPointerId)
+                    if (index >= 0) {
+                        val y = event.getY(index)
+                        val dy = (selectionPanLastY - y).toInt()
+                        if (dy != 0) {
+                            scrollBy(0, dy)
+                            selectionPanLastY = y
+                        }
+                    }
+                }
                 velocityTracker.addMovement(event)
                 if (kotlin.math.abs(event.y - gestureDownY) > touchSlop) gestureDragged = true
             }
+            MotionEvent.ACTION_POINTER_UP -> {
+                if (event.getPointerId(event.actionIndex) == selectionPanPointerId) {
+                    selectionPanPointerId = -1
+                }
+            }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (gestureDragged) {
+                // 选择状态下的拖动是在调选区，松手不该甩动页面
+                if (gestureDragged && !hasTextSelection()) {
                     velocityTracker.addMovement(event)
                     velocityTracker.computeCurrentVelocity(1000, maxFlingVelocity.toFloat())
                     // 手指往上滑（y 变小）→ 内容往下滚（scrollY 变大），所以要取反
@@ -446,6 +490,7 @@ class BodyEditText(context: Context) : EditText(context) {
                 }
                 velocityTracker.clear()
                 gestureDragged = false
+                selectionPanPointerId = -1
             }
         }
         return super.onTouchEvent(event)
