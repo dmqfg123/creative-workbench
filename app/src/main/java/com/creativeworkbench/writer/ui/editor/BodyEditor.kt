@@ -6,6 +6,7 @@ import android.text.Editable
 import android.text.InputType
 import android.text.SpannableStringBuilder
 import android.text.TextWatcher
+import android.view.MotionEvent
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -365,11 +366,103 @@ private fun showSoftKeyboard(view: View) {
     imm.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
 }
 
-/** 程序改文本时抬起来，别让 TextWatcher 当成用户输入回写一遍。 */
+/**
+ * 程序改文本时抬起来，别让 TextWatcher 当成用户输入回写一遍。
+ *
+ * 另外补上 EditText **本来就没有**的滑动惯性：
+ * AOSP 的 TextView/EditText 拖动靠 MovementMethod 在 MOVE 里 scrollTo，抬手就停，没有 fling
+ * （ScrollView/RecyclerView 才有 OverScroller 惯性）。所以正文滑动一直是「划一下停一下」。
+ * 这里照 ScrollView.onTouchEvent 的标准做法补一段：抬手时用 VelocityTracker 取速度，
+ * 交给 OverScroller 按平台默认摩擦（ViewConfiguration.getScrollFriction，0.015）滚到停——
+ * 手感和系统列表一致，不自己发明曲线。
+ */
 class BodyEditText(context: Context) : EditText(context) {
     val suppress = java.util.concurrent.atomic.AtomicBoolean(false)
     private var selectionListener: ((Int) -> Unit)? = null
     private var lastSelection = -1
+
+    /** 平台默认惯性（ScrollView / RecyclerView 同一套参数）。 */
+    private val flingScroller = android.widget.OverScroller(context)
+    private val velocityTracker = android.view.VelocityTracker.obtain()
+    private val viewConfig = android.view.ViewConfiguration.get(context)
+    private val touchSlop = viewConfig.scaledTouchSlop
+    private val minFlingVelocity = viewConfig.scaledMinimumFlingVelocity
+    private val maxFlingVelocity = viewConfig.scaledMaximumFlingVelocity
+    private var gestureDownY = 0f
+    private var gestureDragged = false
+
+    private val flingRunnable = object : Runnable {
+        override fun run() {
+            if (flingScroller.computeScrollOffset()) {
+                scrollTo(0, flingScroller.currY)
+                postOnAnimation(this)
+            }
+        }
+    }
+
+    private fun scrollLimit(): Int {
+        val content = layout?.height ?: return 0
+        return (content - height).coerceAtLeast(0)
+    }
+
+    private fun startFling(velocityY: Int) {
+        val limit = scrollLimit()
+        if (limit <= 0) return
+        flingScroller.fling(
+            0, scrollY,
+            0, velocityY,
+            0, 0,
+            0, limit
+        )
+        postOnAnimation(flingRunnable)
+    }
+
+    private fun stopFling() {
+        if (!flingScroller.isFinished) flingScroller.forceFinished(true)
+        removeCallbacks(flingRunnable)
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                // 手指按下立即停住惯性（和所有系统可滚控件一致）
+                stopFling()
+                velocityTracker.clear()
+                velocityTracker.addMovement(event)
+                gestureDownY = event.y
+                gestureDragged = false
+            }
+            MotionEvent.ACTION_MOVE -> {
+                velocityTracker.addMovement(event)
+                if (kotlin.math.abs(event.y - gestureDownY) > touchSlop) gestureDragged = true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (gestureDragged) {
+                    velocityTracker.addMovement(event)
+                    velocityTracker.computeCurrentVelocity(1000, maxFlingVelocity.toFloat())
+                    // 手指往上滑（y 变小）→ 内容往下滚（scrollY 变大），所以要取反
+                    val velocity = -velocityTracker.yVelocity.toInt()
+                    if (kotlin.math.abs(velocity) > minFlingVelocity) startFling(velocity)
+                }
+                velocityTracker.clear()
+                gestureDragged = false
+            }
+        }
+        return super.onTouchEvent(event)
+    }
+
+    /** 惯性滚动期间由系统在绘制前驱动（与 ScrollView.computeScroll 同一机制）。 */
+    override fun computeScroll() {
+        if (flingScroller.computeScrollOffset()) {
+            scrollTo(0, flingScroller.currY)
+            postInvalidateOnAnimation()
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        stopFling()
+        super.onDetachedFromWindow()
+    }
 
     fun setOnSelectionChangedListener(listener: (Int) -> Unit) {
         selectionListener = listener

@@ -2,6 +2,23 @@
 
 # CHANGELOG
 
+## 0.18.2（2026-11-26）正文滑动补上惯性
+
+**症状**：正文滑动「划一下停一下」，没有惯性。
+
+**根因（平台缺口，不是参数）**：TextView/EditText 的拖动是 MovementMethod 在 ACTION_MOVE 里 scrollTo，
+抬手即停；fling 只有 ScrollView/RecyclerView 这类容器才有。真机实测：一次 60ms 上滑只产生 1 次位置更新，无衰减。
+
+**实现（照 AOSP ScrollView.fling）**
+- BodyEditText 增加 OverScroller + VelocityTracker：DOWN 停住惯性并清点；MOVE 喂点、超过 touchSlop 才算拖动；
+  UP/CANCEL 取 y 速度，超过 scaledMinimumFlingVelocity 就 fling（方向取反）。
+- fling 上限 = layout.height - height；速度上限 scaledMaximumFlingVelocity；
+  postOnAnimation 逐帧 scrollTo，并实现 computeScroll()；onDetachedFromWindow 停。
+- 参数全部取 ViewConfiguration 默认（摩擦 0.015、DECELERATION_RATE 2.358），与系统列表同手感。
+
+**验证**：60ms 快滑≈4 屏、2.5s 衰减（ratio 0.008→0.186→0.282→0.330→…→0.378）；
+200ms 常规滑≈1.4 屏；按下即停，轻点仍只移光标。AOSP 源码引用见 参考/滑动惯性_20261126.md（文档工程）。
+
 ## 0.18.1（2026-11-26）记住上次读到哪儿
 
 **症状**：从编辑器退回书架、再点进作品，正文又回到开头。
