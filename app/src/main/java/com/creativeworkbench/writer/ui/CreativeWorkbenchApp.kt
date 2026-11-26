@@ -291,9 +291,10 @@ fun CreativeWorkbenchApp(viewModel: AppViewModel) {
                         chapterId = chapterId,
                         notes = viewModel.notes.collectAsStateWithLifecycle().value,
                         notesEnabled = settings.notesEnabled,
-                        // 退出直接回书架：不再退到中间的目录页（用户反馈多一层很烦）
+                        // 只退一层：从「笔记详情 → 出现位置 → 编辑器」返回时回到笔记页，
+                        // 而不是一路弹回书架（旧实现把 note/…、outline/… 一起弹掉了）。
                         onBack = {
-                            if (!navController.popBackStack("library", inclusive = false)) {
+                            if (!navController.popBackStack()) {
                                 navController.navigate("library") { launchSingleTop = true }
                             }
                         },

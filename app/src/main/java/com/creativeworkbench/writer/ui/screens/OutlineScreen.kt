@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
@@ -37,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -84,6 +86,22 @@ fun OutlineScreen(
     var showTemplates by remember { mutableStateOf(false) }
     var showForeshadow by remember { mutableStateOf(false) }
     var showImport by remember { mutableStateOf(false) }
+    // 待删除的伏笔 id（ForeshadowSheet 的回调只给 id）
+    var pendingForeshadowDelete by remember { mutableStateOf<String?>(null) }
+    val outlineListState = rememberLazyListState()
+    LaunchedEffect(Unit) {
+        val (index, offset) = com.creativeworkbench.writer.ui.common.ScrollMemory.get("outline-" + workId)
+        if (index > 0) outlineListState.scrollToItem(index, offset)
+    }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            com.creativeworkbench.writer.ui.common.ScrollMemory.save(
+                "outline-" + workId,
+                outlineListState.firstVisibleItemIndex,
+                outlineListState.firstVisibleItemScrollOffset
+            )
+        }
+    }
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -118,6 +136,7 @@ fun OutlineScreen(
         }
 
         LazyColumn(
+            state = outlineListState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -317,8 +336,29 @@ fun OutlineScreen(
                 viewModel.addForeshadow(title, detail, planted, due)
             },
             onMarkPaid = { item, chapterId -> viewModel.markForeshadowPaid(item, chapterId) },
-            onDelete = { viewModel.deleteForeshadow(it) },
+            onDelete = { id ->
+                // 伏笔删除以前是一点就没、没有确认也没有撤销
+                pendingForeshadowDelete = id
+            },
             onDismiss = { showForeshadow = false }
+        )
+    }
+
+    pendingForeshadowDelete?.let { id ->
+        AlertDialog(
+            onDismissRequest = { pendingForeshadowDelete = null },
+            title = { Text("删除这条伏笔？") },
+            text = { Text("删除后不可恢复（本机备份里可能还有）。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteForeshadow(id)
+                    pendingForeshadowDelete = null
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingForeshadowDelete = null }) { Text("取消") }
+            },
+            shape = MaterialTheme.shapes.large
         )
     }
 

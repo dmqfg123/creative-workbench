@@ -114,9 +114,14 @@ class NoteDetailViewModel(
         }
     }
 
+    /**
+     * 立即保存。用 NonCancellable：返回键会立刻销毁这个页面的 ViewModel，
+     * 普通协程在 upsert 挂起处会被取消 —— 最后 ≤700ms 的输入就丢了。
+     */
     fun flush() {
         val note = _state.value.note ?: return
-        viewModelScope.launch { saveNow(note) }
+        saveJob?.cancel()
+        viewModelScope.launch(kotlinx.coroutines.NonCancellable) { saveNow(note) }
     }
 
     private suspend fun saveNow(note: NoteEntity) {

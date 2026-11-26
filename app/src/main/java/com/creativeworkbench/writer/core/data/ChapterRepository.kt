@@ -250,8 +250,15 @@ class ChapterRepository(
         appendJournalBlocks(chapterId, listOf(Block(blockId, text)))
     }
 
-    suspend fun appendJournalBlocks(chapterId: String, blocks: List<Block>) {
-        if (blocks.isEmpty()) return
+    suspend fun appendJournalBlocks(chapterId: String, blocks: List<Block>) = withContext(Dispatchers.IO) {
+        if (blocks.isEmpty()) return@withContext
+        // 和 saveChapter/openChapter 共用一把写锁：否则刚写进 journal 的最后一段可能被 clearJournal 删掉
+        writeMutex.withLock {
+            appendJournalLocked(chapterId, blocks)
+        }
+    }
+
+    private fun appendJournalLocked(chapterId: String, blocks: List<Block>) {
         val now = System.currentTimeMillis()
         val order = blocks.map { it.id }
         val records = ArrayList<JournalRecord>(blocks.size + 1)
@@ -279,7 +286,9 @@ class ChapterRepository(
                 )
             )
         }
-        files.appendJournalBatch(chapterId, records)
+        // 磁盘满/文件被删时不要崩进程：journal 只是兜底，失败记一条面包屑
+        runCatching { files.appendJournalBatch(chapterId, records) }
+            .onFailure { Breadcrumbs.record("journal 写入失败：" + (it.message ?: "IO")) }
     }
 
     suspend fun renameWork(workId: String, title: String) = withContext(Dispatchers.IO) {

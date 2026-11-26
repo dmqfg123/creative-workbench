@@ -43,7 +43,9 @@ data class PreparedContext(
     val preview: ContextPreview? = null,
     val overflow: SettingOverflow? = null,
     /** 本次续写目标字数（生成时按它算 max_tokens）。 */
-    val lengthChars: Int = 600
+    val lengthChars: Int = 600,
+    /** 这份上下文是给哪个动作装配的；生成时要对一下，防止用旧动作的上下文去跑新动作。 */
+    val actionId: String = ""
 )
 
 /**
@@ -225,7 +227,9 @@ class AiContextBuilder(
                 val index = chapterList.indexOfFirst { it.id == id }
                 if (index >= 0) "，计划第 " + (index + 1) + " 章回收" else ""
             } ?: ""
-            "· " + item.title + if (item.detail.isNotBlank()) "：" + item.detail.take(60) else "" + due
+            "· " + item.title +
+                (if (item.detail.isNotBlank()) "：" + item.detail.take(60) else "") +
+                due
         }
         val outlineEntries = renderOutline(outlineNodes, chapterList, chapterId, currentIndex)
         val outlineFit = PromptBudget.fitEntries(outlineEntries, outlineCap, "大纲", keepTail = true)
@@ -258,7 +262,8 @@ class AiContextBuilder(
         // 按死比例切（各 35%）会把「大纲只有 3 条」的剩余额度白白扔掉，
         // 而正文恰恰是最该多带的那一块。
         val usedByOthers = injection.usedTokens + outlineFit.tokens + summaryFit.tokens + materialFit.tokens
-        val chapterCap = (budget - usedByOthers).coerceAtLeast((budget * 0.35).toInt())
+        // 正文槽不能超过剩余预算（旧实现下限是 35%，五槽相加可能超过总预算，预览里「已用 > 预算」）
+        val chapterCap = (budget - usedByOthers).coerceIn((budget * 0.15).toInt(), budget)
         val chapterFit = when {
             !withBody -> PromptBudget.fitBlocks(emptyList(), emptyList(), chapterCap, null, markers = false)
             action.id == AiActions.CHECK -> PromptBudget.fitBlocks(
@@ -410,6 +415,7 @@ class AiContextBuilder(
         }
 
         return PreparedContext(
+            actionId = action.id,
             system = buildList {
                 if (options.customPrompt.isNotBlank()) add(options.customPrompt.trim())
                 if (options.privateUseNote) add(AiActions.PRIVATE_USE_NOTE)
@@ -422,7 +428,9 @@ class AiContextBuilder(
                 blocks = blocksBudget,
                 excluded = dropped,
                 budget = budget,
-                used = blocksBudget.sumOf { it.tokens },
+                // 前一章尾已经算进正文/摘要的上下文里，不再单独计入 used（否则「已用 > 预算」）
+                used = injection.usedTokens + chapterFit.tokens + outlineFit.tokens +
+                    summaryFit.tokens + materialFit.tokens,
                 lengthChars = options.lengthChars,
                 sources = sources
             )

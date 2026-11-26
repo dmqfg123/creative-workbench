@@ -61,7 +61,18 @@ fun TextImportSheet(
         if (uri != null) {
             val text = runCatching {
                 context.contentResolver.openInputStream(uri)?.use { stream ->
-                    decodeText(stream.readBytes())
+                    // 只读到上限为止：几百 MB 的 txt 用 readBytes() 会直接 OOM
+                    val limit = 400_000
+                    val buffer = java.io.ByteArrayOutputStream(limit)
+                    val chunk = ByteArray(64 * 1024)
+                    var total = 0
+                    while (total < limit) {
+                        val read = stream.read(chunk, 0, minOf(chunk.size, limit - total))
+                        if (read <= 0) break
+                        buffer.write(chunk, 0, read)
+                        total += read
+                    }
+                    decodeText(buffer.toByteArray())
                 }
             }.getOrNull()
             if (text.isNullOrBlank()) {
@@ -73,7 +84,10 @@ fun TextImportSheet(
     }
 
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            viewModel.cancel()
+            onDismiss()
+        },
         sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.surface
     ) {

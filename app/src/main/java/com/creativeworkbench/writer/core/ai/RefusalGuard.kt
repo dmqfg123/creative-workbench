@@ -21,7 +21,12 @@ object RefusalGuard {
     fun looksLikeRefusal(text: String): Boolean {
         val value = text.trim()
         if (value.isEmpty()) return false
-        if (value.length > 600) return false
-        return markers.any { value.contains(it) }
+        // 正文里出现「对不起」很常见；只有「很短、且开头就是拒绝口吻」才算拒绝
+        if (value.length > 300) return false
+        val head = value.take(120)
+        if (!markers.any { head.contains(it) }) return false
+        // 有换行分段的大量正文说明是在写，不是拒绝
+        if (value.count { it == '\n' } >= 3) return false
+        return true
     }
 }

@@ -45,9 +45,17 @@ class TextImportViewModel(
     private val _state = MutableStateFlow(TextImportUiState())
     val state: StateFlow<TextImportUiState> = _state.asStateFlow()
     private var job: Job? = null
+    /** 导入进行中：双击「导入」会重复落库。 */
+    private var importing = false
 
     fun setError(message: String) {
         _state.update { it.copy(error = message) }
+    }
+
+    /** 关掉弹层就停掉识别：否则后台继续按章调 API（继续扣费）。 */
+    fun cancel() {
+        job?.cancel()
+        _state.update { it.copy(running = false, progress = "") }
     }
 
     fun setText(text: String) {
@@ -84,8 +92,13 @@ class TextImportViewModel(
                     items = outcome.items,
                     error = outcome.error,
                     usage = outcome.usage,
-                    notice = if (outcome.items.isEmpty()) "" else
-                        "识别出 " + outcome.chapterCount + " 章 · " + outcome.items.size + " 条，勾选后导入"
+                    notice = when {
+                    outcome.items.isEmpty() -> ""
+                    outcome.truncated -> "识别出 " + outcome.chapterCount + " 章（只处理前 " +
+                        com.creativeworkbench.writer.core.ai.ChapterSplitter.MAX_CHAPTERS +
+                        " 章，后面的没抽）· " + outcome.items.size + " 条，勾选后导入"
+                    else -> "识别出 " + outcome.chapterCount + " 章 · " + outcome.items.size + " 条，勾选后导入"
+                }
                 )
             }
         }
@@ -110,6 +123,8 @@ class TextImportViewModel(
     fun importSelected() {
         val chosen = _state.value.items.filter { it.selected }
         if (chosen.isEmpty()) return
+        if (importing) return
+        importing = true
         if (workId == null) {
             _state.update { it.copy(error = "还没选作品：大纲和伏笔需要挂在一部作品上") }
             return
@@ -161,6 +176,7 @@ class TextImportViewModel(
                     }
                 }.onFailure { failures.add(item.title) }
             }
+            importing = false
             val importedIds = chosen.map { it.id }.toSet()
             _state.update { state ->
                 state.copy(

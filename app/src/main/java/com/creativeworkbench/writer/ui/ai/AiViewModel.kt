@@ -74,6 +74,8 @@ data class AiUiState(
     val thinkingChars: Int = 0,
     /** 自动重试提示（429/5xx/网络抖动时显示「第 N 次重试…」）。 */
     val retryNotice: String = "",
+    /** 生成中途失败（有半截文本）：只允许复制，不允许写入正文。 */
+    val partialFailure: Boolean = false,
     /**
      * 设定进上下文的方式。默认「自动」：AI 按这一章要写的东西自己挑，
      * 用户不用每次先点一遍「全部取消」再勾几条。
@@ -161,11 +163,15 @@ class AiViewModel(
         lastSelection = selection
         val config = configStore.config()
         if (!configStore.isConfigured()) {
-            _state.value = AiUiState(action = action, error = "还没配置 AI（更多 → AI 助手）。")
+            // 用 copy：不能把落盘恢复来的面板偏好（模式/勾选/字数/范围）一起复位
+            _state.value = _state.value.copy(action = action, error = "还没配置 AI（更多 → AI 助手）。")
             return
         }
         _state.value = _state.value.copy(
             action = action,
+            // 换动作必须先清掉旧上下文：否则新装配还没回来时点「生成」，
+            // 会用旧动作（比如「检查」的 JSON 提示词）去跑新动作（比如「续写」）
+            prepared = null,
             overflow = null,
             error = null,
             resultText = "",
@@ -175,7 +181,7 @@ class AiViewModel(
         )
         // 连点两个动作时，慢的那次回来会把 prepared 覆盖成旧动作的上下文——直接丢掉前一次
         prepareJob?.cancel()
-        prepareJob = viewModelScope.launch {
+        prepareJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
             val promptOverride = if (action.source == com.creativeworkbench.writer.core.ai.ActionSource.Imported) {
                 container.plugins.promptFor(action)
             } else {
@@ -281,6 +287,11 @@ class AiViewModel(
     fun generate(chapterRevision: Long, contentHash: String) {
         val action = _state.value.action ?: return
         val prepared = _state.value.prepared ?: return
+        // 上下文必须属于当前动作（切换动作后旧上下文会被清空；这里再兜一层）
+        if (prepared.actionId.isNotBlank() && prepared.actionId != action.id) {
+            _state.update { it.copy(error = "正在重新装配上下文，稍等一下再点生成") }
+            return
+        }
         val config = configStore.config()
         val apiKey = configStore.apiKey()
         job?.cancel()
@@ -439,7 +450,8 @@ class AiViewModel(
                     usage = usage,
                     thinkingChars = 0,
                     retryNotice = "",
-                    error = failure
+                    error = failure,
+                    partialFailure = failure != null
                 )
             }
         }

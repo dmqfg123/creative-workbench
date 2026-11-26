@@ -87,7 +87,8 @@ class AiChatViewModel(
         outline = container.outline,
         foreshadowing = container.foreshadowing,
         workId = workId,
-        currentChapterId = null
+        // 用「最近编辑的那一章」当默认目标：否则对话里不写章节名时永远落到全书最后一章
+        currentChapterId = workId?.let { container.positions.lastChapter(it) }
     )
     private val _state = MutableStateFlow(AiChatUiState())
     val state: StateFlow<AiChatUiState> = _state.asStateFlow()
@@ -160,6 +161,7 @@ class AiChatViewModel(
                 turns = it.turns + userTurn + assistantTurn,
                 sending = true,
                 error = null,
+                usage = null,
                 notice = "",
                 lastSearchLabel = "",
                 retryNotice = ""
@@ -327,6 +329,14 @@ class AiChatViewModel(
                         }
                         _state.update { it.copy(usage = (it.usage ?: AiUsage()) + result.usage) }
                         updateAssistant(assistantTurn.id, builder.toString(), false)
+                        if (result.toolCalls.isEmpty() && result.finishReason == "length" &&
+                            result.content.isNotBlank() && round < MAX_TOOL_ROUNDS
+                        ) {
+                            // 撞输出上限：把已写内容当 assistant 前缀，要求接着写
+                            messages.add(ChatMessage("assistant", result.content))
+                            messages.add(ChatMessage("user", "接着上面最后一句继续，不要重复，不要解释。"))
+                            continue
+                        }
                         if (result.toolCalls.isEmpty()) {
                             // 模型拿「平台规则」拒写时重试一次：本 App 没有平台，这类拒绝没有依据
                             if (!refusalRetried &&
@@ -341,9 +351,11 @@ class AiChatViewModel(
                             }
                             finished = true
                         } else {
-                            // 把「我要调用什么」原样交还给模型，否则下一轮它会重复调同一个工具
-                            messages.add(ChatMessage("assistant", result.content, result.toolCalls))
-                            result.toolCalls.take(MAX_CALLS_PER_ROUND).forEach { call ->
+                            // 只把「本轮真的会执行」的调用交还给模型：
+                            // 带上未回填 tool 结果的调用，下一轮服务端会因为缺 tool_call_id 直接 400。
+                            val calls = result.toolCalls.take(MAX_CALLS_PER_ROUND)
+                            messages.add(ChatMessage("assistant", result.content, calls))
+                            calls.forEach { call ->
                                 when (val outcome = projectTools.run(call)) {
                                     is ToolOutcome.Data -> {
                                         allRuns.add(
@@ -442,10 +454,15 @@ class AiChatViewModel(
         }
     }
 
+    /** 正在应用中的提案 id：双击「应用」会重复写库，必须挡住。 */
+    private val applying = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     /** 应用一条写入提案（用户点「应用」才到这一步）。 */
     fun applyProposal(id: String) {
         val proposal = _state.value.proposals.firstOrNull { it.id == id } ?: return
         if (proposal.applied) return
+        // 先占位再起协程：第二次点击直接返回
+        if (!applying.add(id)) return
         viewModelScope.launch {
             runCatching { projectTools.apply(proposal) }
                 .onSuccess { message ->
@@ -468,6 +485,7 @@ class AiChatViewModel(
                         )
                     }
                 }
+                .also { applying.remove(id) }
         }
     }
 

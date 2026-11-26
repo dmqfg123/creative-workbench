@@ -51,11 +51,8 @@ class WebSearchClient {
         customUrl: String
     ): WebSearchOutcome = withContext(Dispatchers.IO) {
         if (query.isBlank()) return@withContext WebSearchOutcome.Error("检索词为空")
-        val client = OkHttpClient.Builder()
-            .connectTimeout(15L, TimeUnit.SECONDS)
-            .readTimeout(25L, TimeUnit.SECONDS)
-            .callTimeout(30L, TimeUnit.SECONDS)
-            .build()
+        // 共享连接池（search 是带 30s 读超时的克隆），不再每次检索都新建 client
+        val client = HttpClientProvider.search
         val request = runCatching { buildRequest(provider, query, apiKey, customUrl) }
             .getOrElse { error -> return@withContext WebSearchOutcome.Error(error.message ?: "请求构造失败") }
             ?: return@withContext WebSearchOutcome.Error("这个搜索服务需要先填 API Key（更多 → AI 助手 → 联网搜索）")

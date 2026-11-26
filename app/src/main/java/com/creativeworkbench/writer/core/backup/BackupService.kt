@@ -75,7 +75,10 @@ class BackupService(
                 // 读不出来就中止导出：把坏章节静默存成空正文，等于用「看起来健康」的备份
                 // 稀释掉一份还能救的旧备份，恢复后那一章就是空的。
                 val blocks = try {
-                    chapterFiles.read(chapter.id)?.blocks ?: emptyList()
+                    // 文件不存在也必须中止：空 blocks 会被写进备份，恢复时把正文覆盖成空章
+                    val content = chapterFiles.read(chapter.id)
+                        ?: error("文件不存在")
+                    content.blocks
                 } catch (error: Exception) {
                     error(
                         "章节「" + chapter.title + "」的正文文件读不出来（" +

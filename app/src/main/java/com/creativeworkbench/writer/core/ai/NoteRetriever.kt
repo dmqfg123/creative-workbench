@@ -163,7 +163,7 @@ class NoteSelector(private val client: AiClient) {
                 message = "本地挑选 " + fallback.size + "/" + candidates.size + " 条"
             )
         }
-        val key = cacheKey(actionId, scanText, candidates, cap)
+        val key = cacheKey(actionId, scanText, candidates, cap, outlineText.hashCode().toString())
         cache[key]?.let { return it }
 
         val listing = candidates.joinToString("\n") { candidate ->
@@ -214,7 +214,7 @@ class NoteSelector(private val client: AiClient) {
         cap: Int
     ): AutoNotePick {
         val candidates = NoteRetriever.candidates(notes, scanText + "\n" + outlineText)
-        val chosen = NoteRetriever.pickByScore(candidates, cap)
+        val chosen = NoteRetriever.pickByScore(candidates, cap).take(MAX_PICKS)
         return AutoNotePick(
             chosen = chosen,
             pool = candidates,
@@ -274,13 +274,20 @@ class NoteSelector(private val client: AiClient) {
         actionId: String,
         scanText: String,
         candidates: List<NoteCandidate>,
-        cap: Int
+        cap: Int,
+        outlineHash: String
     ): String {
         val digest = MessageDigest.getInstance("SHA-256")
         digest.update(actionId.toByteArray())
         digest.update(cap.toString().toByteArray())
         digest.update(scanText.takeLast(2000).toByteArray())
-        candidates.forEach { digest.update(it.note.id.toByteArray()) }
+        // 大纲与候选内容也进 key：改了设定/大纲之后不能复用旧挑选结果
+        digest.update(outlineHash.toByteArray())
+        candidates.forEach { candidate ->
+            digest.update(candidate.note.id.toByteArray())
+            digest.update(candidate.note.content.hashCode().toString().toByteArray())
+            digest.update((if (candidate.note.pinned) "1" else "0").toByteArray())
+        }
         return digest.digest().joinToString("") { "%02x".format(it) }.take(32)
     }
 

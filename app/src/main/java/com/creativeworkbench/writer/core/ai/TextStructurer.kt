@@ -39,8 +39,15 @@ data class ChapterSlice(val index: Int, val title: String, val body: String)
  */
 object ChapterSplitter {
 
+    /**
+     * 章节标题：中文「第N章 / 序章 / 楔子」，也认英文「Chapter 12 / Part 3 / Act 1」
+     * 和纯编号「12. 标题」「十二、标题」——从别处导进来的稿子不一定是中文标题。
+     */
     private val HEAD = Regex(
-        "^\\s*(第\\s*[0-9０-９一二三四五六七八九十百千零〇两]+\\s*[章节回卷篇]|序章|楔子|引子|尾声|后记|番外)" +
+        "^\\s*(第\\s*[0-9０-９一二三四五六七八九十百千零〇两]+\\s*[章节回卷篇]|序章|楔子|引子|尾声|后记|番外" +
+            "|(?i:chapter|part|act|book)\\s*[0-9]+" +
+            "|[0-9]{1,3}\\s*[\\.、]" +
+            "|[一二三四五六七八九十]{1,3}\\s*、)" +
             "\\s*[：:.、—\\-]?\\s*(.*)$"
     )
 
@@ -66,7 +73,6 @@ object ChapterSplitter {
             ChapterSlice(0, title, body)
         }
             .filter { it.body.isNotBlank() }
-            .take(MAX_CHAPTERS)
             .mapIndexed { i, slice -> slice.copy(index = i + 1) }
     }
 }
@@ -75,7 +81,9 @@ data class StructureOutcome(
     val items: List<StructuredItem>,
     val chapterCount: Int,
     val usage: AiUsage? = null,
-    val error: String? = null
+    val error: String? = null,
+    /** 章数超过上限被截断（界面要提示，不能静默丢）。 */
+    val truncated: Boolean = false
 )
 
 /**
@@ -93,8 +101,10 @@ class TextStructurer(private val client: AiClient) {
         apiKey: String,
         onProgress: (done: Int, total: Int, label: String) -> Unit = { _, _, _ -> }
     ): StructureOutcome {
-        val chapters = ChapterSplitter.split(text)
-        if (chapters.isEmpty()) return StructureOutcome(emptyList(), 0, error = "没有可识别的文本")
+        val allChapters = ChapterSplitter.split(text)
+        if (allChapters.isEmpty()) return StructureOutcome(emptyList(), 0, error = "没有可识别的文本")
+        val truncated = allChapters.size > ChapterSplitter.MAX_CHAPTERS
+        val chapters = allChapters.take(ChapterSplitter.MAX_CHAPTERS)
         var usage: AiUsage? = null
         val items = mutableListOf<StructuredItem>()
         var firstError: String? = null
@@ -124,9 +134,10 @@ class TextStructurer(private val client: AiClient) {
         onProgress(chapters.size, chapters.size, "完成")
         return StructureOutcome(
             items = dedupe(items),
-            chapterCount = chapters.size,
+            chapterCount = allChapters.size,
             usage = usage,
-            error = if (items.isEmpty()) firstError ?: "没识别出可导入的内容" else null
+            error = if (items.isEmpty()) firstError ?: "没识别出可导入的内容" else null,
+            truncated = truncated
         )
     }
 

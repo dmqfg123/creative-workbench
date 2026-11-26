@@ -31,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -102,7 +103,15 @@ fun AiPanel(
     onToggleFollowOutline: (Boolean) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val contentScroll = rememberScrollState()
     val clipboard = LocalClipboardManager.current
+    // 生成结束后把结果滚进视野（结果在面板下方，不滚就得手动找）
+    LaunchedEffect(state.generating, state.resultText.isNotBlank()) {
+        if (!state.generating && state.resultText.isNotBlank()) {
+            kotlinx.coroutines.delay(150)
+            contentScroll.animateScrollTo(contentScroll.maxValue)
+        }
+    }
     var confirmWrite by remember { mutableStateOf(false) }
     var confirmSummary by remember { mutableStateOf(false) }
     val action = state.action
@@ -117,7 +126,7 @@ fun AiPanel(
                 .fillMaxWidth()
                 .navigationBarsPadding()
                 .imePadding()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(contentScroll)
                 .padding(horizontal = 24.dp, vertical = 4.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -368,6 +377,21 @@ fun AiPanel(
                 Tag("已自动续写 " + state.continuedRounds + " 次（防止截断）", active = true)
             }
 
+            if (state.partialFailure && state.resultText.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.errorContainer
+                ) {
+                    Text(
+                        "生成中途失败了：下面只是半截内容，可以复制，不能写入正文。",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            }
+
             if (stale && state.resultText.isNotBlank()) {
                 Spacer(Modifier.height(10.dp))
                 Surface(
@@ -513,12 +537,15 @@ fun AiPanel(
                         // 看起来就是「生成好了却写不进去」。
                         PillButton(
                             text = when {
+                                state.partialFailure -> "生成中断，只能复制"
                                 replaces -> "替换选区"
                                 hasActiveBlock -> "写入正文"
                                 else -> "写入正文（接在最后）"
                             },
                             onClick = { confirmWrite = true },
-                            enabled = !stale && if (replaces) selection != null else true
+                            // 生成中途失败时只有半句话，绝不能写进正文
+                            enabled = !stale && !state.partialFailure &&
+                                if (replaces) selection != null else true
                         )
                     }
                 }

@@ -99,6 +99,20 @@ fun NotesScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var importOpen by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    // 从详情返回时回到原来的位置（只做一次，且只在有记录时）
+    LaunchedEffect(Unit) {
+        val (index, offset) = com.creativeworkbench.writer.ui.common.ScrollMemory.get("notes")
+        if (index > 0) listState.scrollToItem(index, offset)
+    }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            com.creativeworkbench.writer.ui.common.ScrollMemory.save(
+                "notes",
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset
+            )
+        }
+    }
 
     LaunchedEffect(pendingFilter) {
         if (pendingFilter != null) {
@@ -132,10 +146,13 @@ fun NotesScreen(
             tagFilter == null || note.tags.split(',').map { it.trim() }.any { it.equals(tagFilter, ignoreCase = true) }
         }
         .filter { note ->
-            query.isBlank() ||
-                note.title.contains(query.trim(), ignoreCase = true) ||
-                note.content.contains(query.trim(), ignoreCase = true) ||
-                note.tags.contains(query.trim(), ignoreCase = true)
+            val needle = query.trim()
+            needle.isBlank() ||
+                note.title.contains(needle, ignoreCase = true) ||
+                // 别名也要能搜到：设定经常记正名，正文里叫别名
+                note.aliases.contains(needle, ignoreCase = true) ||
+                note.content.contains(needle, ignoreCase = true) ||
+                note.tags.contains(needle, ignoreCase = true)
         }
 
     val filteredIds = filtered.map { it.id }

@@ -650,7 +650,7 @@ fun EditorScreen(
             actionId,
             state.blocks,
             state.activeBlockId,
-            if (actionId == AiActions.REWRITE) pendingSelection else null
+            if (actionId == AiActions.REWRITE || actionId == AiActions.EXPAND) pendingSelection else null
         )
     }
 
@@ -752,12 +752,10 @@ fun EditorScreen(
                 }
             },
             onJumpToBlock = { blockId ->
-                val index = blockId.removePrefix("b").toIntOrNull()
-                if (index != null) {
-                    // 列表第 0 项是章节头
-                    aiOpen = false
-                    viewModel.activate(state.blocks.getOrNull(index)?.id ?: "", 0)
-                }
+                // blockId 是正文里的 [[bN]] 或段落 id；统一交给 ViewModel 反查并定位光标
+                aiOpen = false
+                aiViewModel.reset()
+                viewModel.jumpToBlock(blockId)
             },
             // 改字数/范围/来源/勾选笔记后立刻按新配置重新装配上下文（预览马上跟着变）
             onLength = { len ->

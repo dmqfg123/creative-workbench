@@ -227,8 +227,7 @@ class EditorViewModel(
         }
         if (!placed) after.addAll(inserted)
         val result = after.toList()
-        undoStack.addLast(UndoEntry(before, result))
-        redoStack.clear()
+        pushUndo(before.joinToString("\n") { it.text }, _state.value.cursorOffset, coalesce = false)
         _state.update {
             it.copy(
                 blocks = result,
@@ -259,8 +258,7 @@ class EditorViewModel(
             ?.takeIf { it >= 0 } ?: (before.size - 1)
         val inserted = paragraphs.map { Block(UUID.randomUUID().toString(), it) }
         val after = before.toMutableList().apply { addAll(anchor + 1, inserted) }
-        undoStack.addLast(UndoEntry(before, after))
-        redoStack.clear()
+        pushUndo(before.joinToString("\n") { it.text }, _state.value.cursorOffset, coalesce = false)
         _state.update {
             it.copy(
                 blocks = after,
@@ -287,8 +285,11 @@ class EditorViewModel(
         if (start < 0 || end > text.length || start > end) return false
         val newText = text.replaceRange(start, end, replacement)
         val after = before.toMutableList().apply { this[index] = before[index].copy(text = newText) }
-        undoStack.addLast(UndoEntry(before, after))
-        redoStack.clear()
+        // 撤销栈只能有一套：以前压进 undoStack（没人读），撤销时反而吃掉用户刚打的字
+        pushUndo(before.joinToString("\n") { it.text }, _state.value.cursorOffset, coalesce = false)
+        // 段内偏移换算成全章偏移，否则改完立刻「删段/插段」会作用到别的段落
+        val globalCaret = before.take(index).sumOf { it.text.length + 1 } +
+            (start + replacement.length).coerceAtMost(newText.length)
         _state.update {
             it.copy(
                 blocks = after,
@@ -297,7 +298,8 @@ class EditorViewModel(
                 undoAvailable = true,
                 redoAvailable = false,
                 activeBlockId = blockId,
-                cursorOffset = (start + replacement.length).coerceAtMost(newText.length),
+                cursorOffset = globalCaret,
+                pendingCaret = globalCaret,
                 error = null
             )
         }
@@ -308,8 +310,24 @@ class EditorViewModel(
 
     // ================= 单一编辑面（0.17.0） =================
 
-    /** 整篇正文：段落之间用换行连接。 */
-    fun bodyText(): String = _state.value.blocks.joinToString("\n") { it.text }
+    /**
+     * 整篇正文：段落之间用换行连接。
+     *
+     * 必须带缓存：这个函数在「每次按键 → 状态更新 → Compose 重组 → BodyEditor 对比」这条链上
+     * 会被反复调用，原来每次都把整章 join 一遍（5 万字就是每次按键复制 5 万字），
+     * 在 60Hz 手机上直接变成掉帧。blocks 是不可变列表，变了就是新实例，用引用相等判断即可。
+     */
+    private var bodyCacheKey: List<Block>? = null
+    private var bodyCacheValue: String = ""
+
+    fun bodyText(): String {
+        val blocks = _state.value.blocks
+        if (bodyCacheKey !== blocks) {
+            bodyCacheKey = blocks
+            bodyCacheValue = blocks.joinToString("\n") { it.text }
+        }
+        return bodyCacheValue
+    }
 
     /**
      * 单一编辑面里的一次文本变化。
@@ -472,6 +490,22 @@ class EditorViewModel(
             digest.update(block.text.toByteArray())
         }
         return digest.digest().joinToString("") { "%02x".format(it) }.take(32)
+    }
+
+    /** 从 AI「检查结果」跳到某一段：把光标定位到段首并让编辑器滚过去。 */
+    fun jumpToBlock(blockId: String) {
+        val blocks = _state.value.blocks
+        val index = blocks.indexOfFirst { it.id == blockId }
+        if (index < 0) return
+        val offset = blocks.take(index).sumOf { it.text.length + 1 }
+        _state.update {
+            it.copy(
+                activeBlockId = blockId,
+                caretBlockIndex = index,
+                cursorOffset = offset,
+                pendingCaret = offset
+            )
+        }
     }
 
     fun activate(blockId: String, cursorOffset: Int = 0) {
@@ -810,13 +844,17 @@ class EditorViewModel(
                 // 单用户写作场景下内存内容就是作者正在写的东西，取磁盘 revision 补存一次；
                 // 不这么做，这一章在本次会话里的自动保存会永久失效，只剩 journal 兜底。
                 val diskRevision = runCatching { repository.currentRevision(chapterId) }.getOrNull()
-                if (attempt == 0 && diskRevision != null && diskRevision != snapshot.revision) {
-                    _state.update {
-                        it.copy(revision = diskRevision, saving = false, error = null)
-                    }
-                    Breadcrumbs.record("保存冲突：已用磁盘 revision " + diskRevision + " 重存一次")
-                    return saveNowLocked(attempt = 1)
+                // 0.19.x 以前这里会「拿磁盘 revision 把内存内容再存一遍」——那会把
+                // AI 刚追加到正文的段落整段覆盖掉（工具写入用的也是 saveChapter）。
+                // 现在：先留一份本章快照，再报错让用户重开这一章，绝不盲写。
+                runCatching { repository.saveSnapshot(chapterId, snapshot.blocks) }
+                _state.update {
+                    it.copy(
+                        saving = false,
+                        error = "这一章在别处被改过（可能是 AI 写入或恢复）。已为你留了一份本章快照；重开这一章可看到最新内容。"
+                    )
                 }
+                Breadcrumbs.record("保存冲突：磁盘 revision 已变，保留快照并停止自动保存")
                 _state.update { it.copy(saving = false, error = "内容已变化，保存被拒绝（重开这一章可恢复）") }
             }
             SaveResult.NotFound -> {

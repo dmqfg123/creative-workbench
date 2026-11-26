@@ -79,6 +79,7 @@ fun AiChatScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     var draft by remember { mutableStateOf("") }
     var importOpen by remember { mutableStateOf(false) }
+    var confirmClear by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val clipboard = LocalClipboardManager.current
 
@@ -87,6 +88,24 @@ fun AiChatScreen(
         if (state.turns.isNotEmpty()) {
             listState.animateScrollToItem(state.turns.lastIndex)
         }
+    }
+
+    if (confirmClear) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("清空这次对话？") },
+            text = { Text("对话记录会删掉，已存成笔记的内容不受影响。") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    confirmClear = false
+                    viewModel.clear()
+                }) { Text("清空", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmClear = false }) { Text("取消") }
+            },
+            shape = MaterialTheme.shapes.large
+        )
     }
 
     if (importOpen) {
@@ -114,7 +133,7 @@ fun AiChatScreen(
                 )
             }
             IconButton(
-                onClick = { viewModel.clear() },
+                onClick = { confirmClear = true },
                 enabled = state.turns.isNotEmpty(),
                 modifier = Modifier.size(44.dp)
             ) {

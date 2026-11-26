@@ -403,6 +403,10 @@ class ProjectTools(
             "update_note" -> {
                 val note = resolveNote(args["id"].orEmpty())
                     ?: throw IllegalStateException("找不到这条笔记")
+                // 模型常把「不改」写成空串；照写会把整条笔记清空
+                if (args["content"].isNullOrBlank()) {
+                    throw IllegalStateException("新内容为空，已取消（笔记没有被清空）")
+                }
                 val newTitle = args["title"].orEmpty().trim()
                 notes.upsert(
                     note.copy(
@@ -427,6 +431,9 @@ class ProjectTools(
             "update_outline_node" -> {
                 val node = resolveOutlineNode(args["id"].orEmpty())
                     ?: throw IllegalStateException("找不到这个大纲节点")
+                if (args["content"].isNullOrBlank()) {
+                    throw IllegalStateException("新要点为空，已取消（大纲节点没有被清空）")
+                }
                 val chapter = if (args["chapter"].isNullOrBlank()) {
                     node.chapterId
                 } else {

@@ -117,13 +117,8 @@ class AiClient {
         val stream = hooks != null
         val payload = buildPayload(config, tuning, messages, stream, webSearch, tools, jsonMode)
 
-        val client = OkHttpClient.Builder()
-            .connectTimeout(20L, TimeUnit.SECONDS)
-            // 空闲判据：DSH 的 streamIdleTimeoutMs = 300_000。故意不设 callTimeout。
-            .readTimeout(IDLE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .writeTimeout(60L, TimeUnit.SECONDS)
-            .retryOnConnectionFailure(true)
-            .build()
+        // 共享连接池/线程池（见 HttpClientProvider）；读超时就是原来的空闲判据 300s
+        val client = HttpClientProvider.shared
 
         val request = Request.Builder()
             .url(endpoint)
@@ -133,6 +128,8 @@ class AiClient {
             .build()
 
         var attempt = 0
+        // 空响应单独限次：否则一次内容策略/服务端异常会连发 6 次全价请求
+        var emptyAttempts = 0
         var lastMessage = "请求失败"
         while (true) {
             attempt++
@@ -167,8 +164,13 @@ class AiClient {
                 is Attempt.Ok -> return@withContext outcome.result
                 is Attempt.Fail -> {
                     lastMessage = outcome.message
+                    val emptyResponse = outcome.message.contains("返回为空")
+                    if (emptyResponse) emptyAttempts++
+                    val emptyExhausted = emptyResponse && emptyAttempts > 2
                     // 已经吐了字就不能重试：重试会把同一段再吐一遍
-                    if (!outcome.retryable || emitted > 0 || attempt > retryPolicy.maxRetries) {
+                    if (!outcome.retryable || emitted > 0 || emptyExhausted ||
+                        attempt > retryPolicy.maxRetries
+                    ) {
                         return@withContext AiCallResult.Error(outcome.message)
                     }
                     val wait = outcome.retryAfter ?: retryPolicy.delayMs(attempt)
@@ -263,7 +265,8 @@ class AiClient {
                     null
                 )
             }
-            chunk.optJSONObject("usage")?.let { usage = (usage ?: AiUsage()) + parseUsage(it) }
+            // 同一次请求里 usage 是累计值，覆盖而不是相加（否则按片数翻倍）
+            chunk.optJSONObject("usage")?.let { usage = parseUsage(it) }
             val choice = chunk.optJSONArray("choices")?.optJSONObject(0) ?: continue
             choice.optString("finish_reason").takeIf { it.isNotEmpty() }?.let { finish = it }
             val delta = choice.optJSONObject("delta") ?: continue
