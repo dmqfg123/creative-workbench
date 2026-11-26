@@ -206,9 +206,6 @@ fun EditorScreen(
     val density = LocalDensity.current
     val keyboard = LocalSoftwareKeyboardController.current
     val bottomMarginPx = with(density) { 12.dp.roundToPx() }
-    val positionPrefs = remember {
-        context.getSharedPreferences("editor_positions", Context.MODE_PRIVATE)
-    }
     var notesOpen by remember { mutableStateOf(false) }
     // 删段落后的撤销条：内联在工具条上方，不再用 Snackbar（会压在键盘/工具条上）
     var undoBarVisible by remember { mutableStateOf(false) }
@@ -247,27 +244,61 @@ fun EditorScreen(
             viewModel.persistChapterNote()
         }
     }
-    // 继续上次位置：单一编辑面下记「光标偏移 + 滚动位置」，比记 block id 稳
-    LaunchedEffect(chapterId) {
-        snapshotFlow { bodyController.caret() to bodyController.scrollY() }
-            .distinctUntilChanged()
-            .collectLatest { (caret, scroll) ->
-                delay(700)
-                positionPrefs.edit().putInt(chapterId + ":caret", caret)
-                    .putInt(chapterId + ":scroll", scroll).apply()
-            }
+    // 继续上次位置：记「光标字符偏移 + 滚动比例」。
+    // 存比例而不是像素——换字号/换屏宽后，像素值会把用户丢到别的地方。
+    val savePosition: () -> Unit = {
+        runCatching {
+            app.container.positions.save(
+                chapterId = chapterId,
+                caret = bodyController.caretForSave(),
+                scrollRatio = bodyController.ratioForSave(),
+                topChar = bodyController.topCharForSave()
+            )
+        }
     }
-    // 恢复到上次光标（只在章节加载完成后做一次）
+    LaunchedEffect(chapterId) {
+        // 书架点进来时优先回到这一章：记的是「上次在编辑哪一章」，不是「最近保存过哪一章」
+        app.container.positions.setLastChapter(workId, chapterId)
+    }
+    // 位置随滚动/移光标持续落盘（控制器内部 500ms 节流）：
+    // 不等退出那一刻——返回、被杀、切后台都可能来不及走保存分支。
+    DisposableEffect(bodyController, chapterId) {
+        bodyController.onPositionChanged = { caret, ratio, topChar ->
+            app.container.positions.save(chapterId, caret, ratio, topChar)
+        }
+        onDispose { bodyController.onPositionChanged = null }
+    }
+    /**
+     * 恢复到上次位置（每章只做一次）。
+     *
+     * 旧实现的坑：章节加载完成的那一刻，BodyEditor 这个 AndroidView 往往还没挂上、
+     * 更没有完成排版，moveCaret/scrollTo 全落在 null 上；然后 restoredPosition 直接置 true，
+     * 再也不重试——表现就是「每次从首页进来都回到开头」。
+     * 现在：等挂载 → 等布局出高度 → 按比例滚（restoreScroll 内部还有布局重试）。
+     */
     LaunchedEffect(state.loading) {
-        if (!state.loading && !restoredPosition) {
-            val caret = positionPrefs.getInt(chapterId + ":caret", 0)
-            val scroll = positionPrefs.getInt(chapterId + ":scroll", 0)
-            if (caret > 0) {
-                delay(120)
-                bodyController.moveCaret(caret)
-                bodyController.scrollTo(scroll)
-            }
-            restoredPosition = true
+        if (state.loading || restoredPosition) return@LaunchedEffect
+        restoredPosition = true
+        val position = app.container.positions.load(chapterId) ?: return@LaunchedEffect
+        var waited = 0
+        while (!bodyController.isAttached && waited < 1200) {
+            delay(32)
+            waited += 32
+        }
+        if (!bodyController.isAttached) return@LaunchedEffect
+        // setCaret 只放光标不滚动；滚动交给 restoreScroll 按比例做
+        android.util.Log.i(
+            "WB_POS",
+            "restore-chapter " + chapterId.take(8) + " caret=" + position.caret +
+                " ratio=" + String.format(java.util.Locale.US, "%.3f", position.scrollRatio)
+        )
+        if (position.caret > 0) bodyController.setCaret(position.caret)
+        delay(60)
+        // 主锚点：字符偏移（换字号/换屏宽也落在同一句）；没有偏移才退回比例/光标
+        when {
+            position.topChar > 0 -> bodyController.restoreToChar(position.topChar, position.scrollRatio)
+            position.scrollRatio > 0.001f -> bodyController.restoreScroll(position.scrollRatio)
+            position.caret > 0 -> bodyController.scrollCaretIntoView()
         }
     }
 
@@ -303,6 +334,8 @@ fun EditorScreen(
 
     BackHandler {
         keyboard?.hide()
+        // 返回这一刻视图还在，可以把最后 300ms 内的滚动补进缓存
+        bodyController.notifyPosition(force = true)
         viewModel.flushAndBack(onBack)
     }
 
@@ -310,10 +343,18 @@ fun EditorScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) viewModel.refreshIfClean()
-            if (event == Lifecycle.Event.ON_PAUSE) viewModel.flush()
+            if (event == Lifecycle.Event.ON_PAUSE) {
+                // 只写缓存：此时视图可能已经被导航摘掉，重算会得到 0
+                savePosition()
+                viewModel.flush()
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            // 返回时界面先于 viewmodel 销毁：这里再存一次（此时控制器已缓存最后位置）
+            savePosition()
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     val activeBlockText = state.blocks.firstOrNull { it.id == state.activeBlockId }?.text

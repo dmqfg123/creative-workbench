@@ -2,6 +2,29 @@
 
 # CHANGELOG
 
+## 0.18.1（2026-11-26）记住上次读到哪儿
+
+**症状**：从编辑器退回书架、再点进作品，正文又回到开头。
+
+**根因（真机 logcat 定位，两个缺陷叠加）**
+1. 退出时保存位置发生在 ON_PAUSE / onDispose：此时导航已把 AndroidView 摘掉，editText.scrollY 归零，
+   把 46ms 前刚存好的 ratio=0.140 覆盖成 0.000。
+2. 恢复发生在 state.loading 变 false 的那一帧：EditText 往往还没 attach、StaticLayout 还没算完，
+   scrollTo 被系统裁成 0；随后 restoredPosition=true，不再重试。
+
+**修复**
+- 位置模型改为阅读器式双锚点：**视口顶部行的首字符偏移**（主）+ 滚动比例（备）+ 光标偏移；
+  换字号/换屏宽后仍落在同一句。
+- 只在 onScrollChanged / onSelectionChanged 刷新缓存并落盘（300ms 节流）；返回键 force 刷新一次；
+  ON_PAUSE/dispose 只写缓存快照，**绝不重算**。
+- 恢复：等 attach（≤1200ms）→ 等 layout 出高度 → getLineForOffset → scrollTo(getLineTop)；
+  布局二次排版把位置重置成 0 时补一次校正（只在 scrollY==0 时，避免抢用户滚动）。
+- 书架点进作品优先回到 work:<id>:chapter 记住的那一章，失效才退回「最近保存的一章」。
+- 新增 core/settings/EditorPositionStore.kt（不进备份：位置是本机界面状态）。
+
+**验证**：真机滚动两屏 → 返回 → 再进入，落回第 37 行（logcat: restore-char offset=684 line=37 target=4958 scrollY=4958）；
+force-stop 重启后同样落回。调试日志用 tag WB_POS，排查同类问题直接 logcat -s WB_POS。
+
 ## 0.18.0（2026-11-26）AI 与项目打通：设定自选 / 工具调用 / 文本导入
 
 **一、设定不再默认全选（用户最直接的不满）**

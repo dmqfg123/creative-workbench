@@ -13,6 +13,7 @@ import com.creativeworkbench.writer.core.data.OutlineRepository
 import com.creativeworkbench.writer.core.data.WorkbenchDatabase
 import com.creativeworkbench.writer.core.nav.ModuleHost
 import com.creativeworkbench.writer.core.nav.ModuleRuntime
+import com.creativeworkbench.writer.core.settings.EditorPositionStore
 import com.creativeworkbench.writer.core.settings.SettingsRepository
 
 class AppContainer(context: Context) {
@@ -26,6 +27,7 @@ class AppContainer(context: Context) {
     val aiHistory: AiHistoryStore = AiHistoryStore(context)
     val plugins: PluginStore = PluginStore(context)
     val settings: SettingsRepository = SettingsRepository(context)
+    val positions: EditorPositionStore = EditorPositionStore(context)
     val backup: BackupService = BackupService(context, database, chapterFiles, aiHistory, settings, aiConfig)
     val moduleHost: ModuleHost = ModuleHost()
     val moduleRuntime: ModuleRuntime = ModuleRuntime(moduleHost)

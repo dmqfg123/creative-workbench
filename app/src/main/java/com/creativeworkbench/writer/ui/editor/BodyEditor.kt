@@ -42,6 +42,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 class BodyEditorController {
     internal var editText: BodyEditText? = null
     internal var buffer: SpannableStringBuilder? = null
+    /** 编辑器销毁后界面还要存一次位置：销毁前把最后的值留在这里。 */
+    internal var lastCaret: Int = 0
+    internal var lastScrollRatio: Float = 0f
+    /** 视口顶部那一行的首字符偏移（主锚点，见 EditorPositionStore 的注释）。 */
+    internal var lastTopChar: Int = 0
 
     val isAttached: Boolean get() = editText != null
 
@@ -67,6 +72,12 @@ class BodyEditorController {
         val target = offset.coerceIn(0, view.text?.length ?: 0)
         view.setSelection(target)
         scrollCaretIntoView()
+    }
+
+    /** 只放光标，不动滚动（恢复位置时用：滚动要按上次的比例走，不能被光标抢）。 */
+    fun setCaret(offset: Int) {
+        val view = editText ?: return
+        view.setSelection(offset.coerceIn(0, view.text?.length ?: 0))
     }
 
     fun focusAndShowKeyboard() {
@@ -103,6 +114,119 @@ class BodyEditorController {
 
     fun scrollTo(y: Int) {
         editText?.post { editText?.scrollTo(0, y) }
+    }
+
+    /** 可滚动的总距离（内容高 − 视口高）。布局没完成时是 0。 */
+    fun scrollMax(): Int {
+        val view = editText ?: return 0
+        val content = view.layout?.height ?: return 0
+        return (content - view.height).coerceAtLeast(0)
+    }
+
+    /** 当前滚动比例（0–1），存盘用。 */
+    fun scrollRatio(): Float {
+        val max = scrollMax()
+        return if (max <= 0) 0f else (scrollY().toFloat() / max).coerceIn(0f, 1f)
+    }
+
+    /** 位置变化回调（滚动/移光标时触发，内部按 300ms 节流）：界面用它持续落盘。 */
+    var onPositionChanged: ((caret: Int, ratio: Float, topChar: Int) -> Unit)? = null
+    private var lastNotifyAt = 0L
+
+    /**
+     * 只在「有滚动/移光标」时刷新缓存并落盘。
+     * 真机日志证明：离开页面那一刻（ON_PAUSE / onDispose）EditText 的 scrollY 已经是 0，
+     * 在这里重算会把刚存好的 0.140 覆盖成 0.000——这正是「每次都回到开头」的真正原因。
+     * 所以缓存只由滚动事件刷新，保存只读缓存。
+     */
+    internal fun notifyPosition(force: Boolean = false) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!force && now - lastNotifyAt < 300) return
+        lastNotifyAt = now
+        editText?.let { view ->
+            lastCaret = view.selectionStart.coerceAtLeast(0)
+            lastScrollRatio = scrollRatio()
+            lastTopChar = topCharOffset()
+        }
+        onPositionChanged?.invoke(lastCaret, lastScrollRatio, lastTopChar)
+    }
+
+    /** 存盘用：永远是「最后一次滚动/移光标」的快照，绝不在离开页面时重算。 */
+    fun caretForSave(): Int = lastCaret
+
+    fun ratioForSave(): Float = lastScrollRatio
+
+    fun topCharForSave(): Int = lastTopChar
+
+    /** 视口顶部那一行的首字符偏移。布局没完成时退回上次的值。 */
+    fun topCharOffset(): Int {
+        val view = editText ?: return lastTopChar
+        val layout = view.layout ?: return lastTopChar
+        val line = layout.getLineForVertical(view.scrollY)
+        return layout.getLineStart(line).coerceAtLeast(0).also { lastTopChar = it }
+    }
+
+    /**
+     * 按「字符偏移」恢复（阅读器的做法：定位到那句，而不是某个像素）。
+     * 布局没出来就隔一帧重试；最终还不行才退回按比例。
+     */
+    fun restoreToChar(offset: Int, ratioFallback: Float, attempts: Int = 8) {
+        val view = editText ?: return
+        val layout = view.layout
+        val length = view.text?.length ?: 0
+        if (layout == null || length == 0 || scrollMax() <= 0) {
+            if (attempts > 0) {
+                view.postDelayed({ restoreToChar(offset, ratioFallback, attempts - 1) }, 50)
+            } else {
+                restoreScroll(ratioFallback)
+            }
+            return
+        }
+        val safe = offset.coerceIn(0, length)
+        val line = layout.getLineForOffset(safe)
+        val target = layout.getLineTop(line).coerceIn(0, scrollMax())
+        view.scrollTo(0, target)
+        android.util.Log.i("WB_POS", "restore-char offset=" + safe + " line=" + line +
+            " target=" + target + " scrollY=" + view.scrollY)
+        view.postDelayed({
+            // 同样的道理：只在被布局重置成 0 时补一次，不抢用户滚动
+            if (view.scrollY == 0 && target > 0 && scrollMax() > 0) view.scrollTo(0, target)
+        }, 160)
+    }
+
+    /**
+     * 按比例恢复滚动。**必须等布局算完**：
+     * EditText 的 StaticLayout 是异步的，刚挂载时 layout 为空、内容高还没出来，
+     * 这时 scrollTo 会被系统裁成 0——这正是「重新打开总是回到开头」的直接原因。
+     * 所以这里带重试，布局没就绪就隔一帧再来。
+     */
+    fun restoreScroll(ratio: Float, attempts: Int = 6) {
+        android.util.Log.i(
+            "WB_POS",
+            "restore ratio=" + String.format(java.util.Locale.US, "%.3f", ratio) +
+                " max=" + scrollMax() + " attempts=" + attempts
+        )
+        val view = editText ?: return
+        val safeRatio = ratio.coerceIn(0f, 1f)
+        val max = scrollMax()
+        if (max <= 0) {
+            if (attempts > 0) {
+                view.postDelayed({ restoreScroll(safeRatio, attempts - 1) }, 50)
+            }
+            return
+        }
+        view.scrollTo(0, (safeRatio * max).toInt())
+        android.util.Log.i("WB_POS", "applied max=" + max + " scrollY=" + view.scrollY)
+        // 布局偶尔会二次排版把位置重置：只在「确实被重置」时补一次，
+        // 不要持续重试——那会和用户刚做的滑动抢滚动。
+        view.postDelayed({
+            // 只有「被布局重置成 0」才补一次：用户自己滑走的位置绝不抢回来
+            val now = scrollMax()
+            if (now > 0 && view.scrollY == 0) {
+                val target = (safeRatio * now).toInt()
+                if (target > 0) view.scrollTo(0, target)
+            }
+        }, 160)
     }
 }
 
@@ -195,8 +319,10 @@ fun BodyEditor(
             }
         }
         editText.addTextChangedListener(watcher)
+        editText.onScrollChanged = { controller.notifyPosition() }
         onDispose {
             editText.removeTextChangedListener(watcher)
+            editText.onScrollChanged = null
             controller.editText = null
             controller.buffer = null
         }
@@ -219,7 +345,10 @@ fun BodyEditor(
         editText.setTextColor(textColor)
     }
 
-    editText.setOnSelectionChangedListener { offset -> onSel[0]?.invoke(offset) }
+    editText.setOnSelectionChangedListener { offset ->
+        controller.notifyPosition()
+        onSel[0]?.invoke(offset)
+    }
 
     AndroidView(
         factory = { editText },
@@ -244,6 +373,14 @@ class BodyEditText(context: Context) : EditText(context) {
 
     fun setOnSelectionChangedListener(listener: (Int) -> Unit) {
         selectionListener = listener
+    }
+
+    /** 滚动也回调：位置要随滚动持续落盘，不能只等退出那一刻。 */
+    var onScrollChanged: (() -> Unit)? = null
+
+    override fun onScrollChanged(horiz: Int, vert: Int, oldHoriz: Int, oldVert: Int) {
+        super.onScrollChanged(horiz, vert, oldHoriz, oldVert)
+        onScrollChanged?.invoke()
     }
 
     override fun onSelectionChanged(selStart: Int, selEnd: Int) {

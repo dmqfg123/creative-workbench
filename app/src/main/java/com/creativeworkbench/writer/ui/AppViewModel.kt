@@ -136,10 +136,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun openWork(workId: String) {
         viewModelScope.launch {
             try {
-                // PRD：点卡片进「最近编辑的篇章」。章节 updatedAt 每次保存都会更新。
+                // 点卡片回到「上次在编辑的那一章」：优先用编辑位置记下的章节；
+                // 没有记录（新装/换设备/那章被删）才退回「最近保存过的一章」。
+                // 只用 updatedAt 是不够的：读了一会儿没改字，它仍然是上次保存的那章，
+                // 用户看到的却是「怎么又跳到别的章去了」。
                 val chapters = chapterRepository.chapters(workId)
-                val recent = chapters.maxByOrNull { it.updatedAt }
-                val chapter = recent ?: chapterRepository.ensureFirstChapter(workId)
+                val remembered = container.positions.lastChapter(workId)
+                    ?.let { id -> chapters.firstOrNull { it.id == id } }
+                val chapter = remembered
+                    ?: chapters.maxByOrNull { it.updatedAt }
+                    ?: chapterRepository.ensureFirstChapter(workId)
                 if (chapter == null) {
                     _events.emit(AppEvent.Toast("作品不存在"))
                     return@launch
