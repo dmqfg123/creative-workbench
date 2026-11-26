@@ -93,8 +93,43 @@ class AiChatViewModel(
     val state: StateFlow<AiChatUiState> = _state.asStateFlow()
     private var job: Job? = null
 
+    /** 对话落盘文件：换 tab / 杀进程后还能接着聊（以前一离开 tab 就全丢）。 */
+    private val chatFile = java.io.File(
+        application.filesDir,
+        "chat-" + (workId ?: "none") + ".json"
+    )
+
     init {
-        _state.update { it.copy(configured = configStore.isConfigured()) }
+        _state.update { it.copy(configured = configStore.isConfigured(), turns = loadTurns()) }
+    }
+
+    private fun loadTurns(): List<ChatTurn> = runCatching {
+        if (!chatFile.exists()) return emptyList()
+        val array = org.json.JSONArray(chatFile.readText())
+        (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            ChatTurn(
+                id = item.optString("id"),
+                role = item.optString("role"),
+                text = item.optString("text"),
+                streaming = false
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    private fun persistTurns(turns: List<ChatTurn>) {
+        runCatching {
+            val array = org.json.JSONArray()
+            turns.filter { !it.streaming && it.text.isNotBlank() }.takeLast(60).forEach { turn ->
+                array.put(
+                    org.json.JSONObject()
+                        .put("id", turn.id)
+                        .put("role", turn.role)
+                        .put("text", turn.text)
+                )
+            }
+            chatFile.writeText(array.toString())
+        }
     }
 
     fun setWebEnabled(enabled: Boolean) = _state.update { it.copy(webEnabled = enabled) }
@@ -108,6 +143,7 @@ class AiChatViewModel(
     fun clear() {
         job?.cancel()
         _state.update { it.copy(turns = emptyList(), sending = false, error = null, proposals = emptyList()) }
+        runCatching { chatFile.delete() }
     }
 
     fun send(text: String) {
@@ -361,6 +397,7 @@ class AiChatViewModel(
                 hits
             )
             updateAssistantRuns(assistantTurn.id, allRuns)
+            persistTurns(_state.value.turns)
             _state.update {
                 it.copy(
                     sending = false,
