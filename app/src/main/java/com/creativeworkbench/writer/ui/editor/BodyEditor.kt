@@ -129,7 +129,10 @@ fun BodyEditor(
 
     val buffer = remember { SpannableStringBuilder(text) }
     val density = androidx.compose.ui.platform.LocalDensity.current
-    val gapPx = with(density) { 9.dp.toPx().toInt() }
+    // 行距增量：只用系统 setLineSpacing（add 是固定值，不会随测量次数累积）。
+    // 之前自造的 LineHeightSpan 在每次 chooseHeight 里又减一次 gap，行高越测越大，
+    // 结果就是「光标 3–4 行高、每行之间空一大截」。
+    val lineExtraPx = with(density) { 5.dp.toPx() }
 
     val editText = remember {
         BodyEditText(context).apply {
@@ -140,7 +143,7 @@ fun BodyEditor(
             imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI
             setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp)
             typeface = Typeface.SERIF
-            setLineSpacing(0f, lineHeightSp / textSizeSp)
+            setLineSpacing(lineExtraPx, lineHeightSp / textSizeSp)
             gravity = Gravity.TOP or Gravity.START
             isVerticalScrollBarEnabled = true
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
@@ -180,29 +183,6 @@ fun BodyEditor(
         }
     }
 
-    // 段落间距：光标/文本变化后合并 200ms 再刷 span，避免每个字都重扫全文
-    var spanJob: android.os.Handler? = remember { null }
-    val refreshGaps: () -> Unit = {
-        val editable = buffer
-        editText.suppress.set(true)
-        editable.getSpans(0, editable.length, ParagraphGapSpan::class.java).forEach { editable.removeSpan(it) }
-        var index = editable.indexOf('\n')
-        while (index >= 0 && index + 1 < editable.length) {
-            editable.setSpan(
-                ParagraphGapSpan(gapPx),
-                index + 1,
-                (index + 2).coerceAtMost(editable.length),
-                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
-            index = editable.indexOf('\n', index + 1)
-        }
-        editText.suppress.set(false)
-    }
-    LaunchedEffect(text.length) {
-        kotlinx.coroutines.delay(200)
-        refreshGaps()
-    }
-
     DisposableEffect(editText) {
         controller.editText = editText
         controller.buffer = buffer
@@ -233,9 +213,9 @@ fun BodyEditor(
         editText.suppress.set(false)
     }
 
-    LaunchedEffect(textSizeSp, lineHeightSp, textColor) {
+    LaunchedEffect(textSizeSp, lineHeightSp, textColor, lineExtraPx) {
         editText.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp)
-        editText.setLineSpacing(0f, lineHeightSp / textSizeSp)
+        editText.setLineSpacing(lineExtraPx, lineHeightSp / textSizeSp)
         editText.setTextColor(textColor)
     }
 
@@ -246,26 +226,6 @@ fun BodyEditor(
         modifier = modifier,
         update = { view -> view.setTextColor(textColor) }
     )
-}
-
-/**
- * 段落间距：给每个段落的首行加一点上方留白。
- * 单一编辑面里段落只是 \n，靠这个 span 才不会「挤成一坨」。
- * 只覆盖段落首字符，所以只抬高该段第一行，段内行距不变。
- */
-private class ParagraphGapSpan(private val gapPx: Int) : android.text.style.LineHeightSpan {
-    override fun chooseHeight(
-        text: CharSequence,
-        start: Int,
-        end: Int,
-        spanstartv: Int,
-        lineHeight: Int,
-        fm: android.graphics.Paint.FontMetricsInt
-    ) {
-        if (gapPx <= 0) return
-        fm.top -= gapPx
-        fm.ascent -= gapPx
-    }
 }
 
 private const val MENU_AI_REWRITE = 1001
