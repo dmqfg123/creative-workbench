@@ -200,7 +200,12 @@ fun AiPanel(
                 }
             }
 
-            if (action?.id != AiActions.CHECK && action?.id != AiActions.SUMMARY && state.includeBody) {
+            // 有选区时「正文范围」没有意义（改的就是选中的那段）——只隐藏无用项，不加任何说明文字
+            val selectionMode = (action?.id == AiActions.REWRITE || action?.id == AiActions.EXPAND) &&
+                state.selectionChars > 0
+            if (!selectionMode && action?.id != AiActions.CHECK &&
+                action?.id != AiActions.SUMMARY && state.includeBody
+            ) {
                 Spacer(Modifier.height(8.dp))
                 ChipLine("正文范围") {
                     BodyRange.entries.forEach { range ->

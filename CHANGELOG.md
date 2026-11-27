@@ -2,6 +2,12 @@
 
 # CHANGELOG
 
+## 1.0.3（2026-11-27）修复 AI 改写「打不开 / 原文只有 1 字」
+
+- 选区不再在点菜单时现读：BodyEditText 在 onSelectionChanged 里记录最近一次非空选区，点击时用 captureRewriteTarget() 取（当前选区 → 最近选区 → 放弃）。
+- 取不到选区时给 Toast 提示，不再静默无反应。
+- 有选区时隐藏无意义的「正文范围」chip；不新增任何说明文字。
+
 ## 1.0.2（2026-11-27）修复 AI 改写闪退
 
 - 选中文字点「AI 改写」崩溃：StringIndexOutOfBoundsException（选区越界）。改为读当前文本并夹住选区（clampSelection），越界不再 substring。
