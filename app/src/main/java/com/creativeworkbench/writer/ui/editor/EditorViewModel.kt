@@ -63,7 +63,14 @@ data class EditorUiState(
     /** 撤销/段落操作后要求把光标放到这里（界面消费后清空）。 */
     val pendingCaret: Int? = null,
     /** 本章历史快照（恢复用）。 */
-    val history: List<com.creativeworkbench.writer.core.data.SnapshotEntity> = emptyList()
+    val history: List<com.creativeworkbench.writer.core.data.SnapshotEntity> = emptyList(),
+    /**
+     * 上一次「检查」的结果。
+     *
+     * 放在编辑器状态里而不是 AI 面板里：面板一关/一跳转就没了，
+     * 用户回头想再看一遍只能重跑一次（花钱又慢）。
+     */
+    val checkIssues: List<com.creativeworkbench.writer.core.ai.AiIssue> = emptyList()
 )
 
 class EditorViewModel(
@@ -355,6 +362,8 @@ class EditorViewModel(
             )
         }
         editVersion++
+        // 改完字顺手清理「原文已经不存在」的检查项：列表不会越用越脏
+        pruneCheckIssues()
         markDirty(blocks)
     }
 
@@ -499,10 +508,75 @@ class EditorViewModel(
         return digest.digest().joinToString("") { "%02x".format(it) }.take(32)
     }
 
+    /** 检查结果落地：面板关掉也还在（存在编辑器状态里）。 */
+    fun setCheckIssues(issues: List<com.creativeworkbench.writer.core.ai.AiIssue>) {
+        _state.update { it.copy(checkIssues = issues) }
+    }
+
+    fun clearCheckIssues() = _state.update { it.copy(checkIssues = emptyList()) }
+
+    /**
+     * 把 AI 给的 blockId 解析成段落下标。
+     *
+     * 「检查」的正文里带 [[bN]] 标记，模型经常直接把 "bN" 当 blockId 回给我们；
+     * 而真实段落 id 是 UUID。两种都要认，否则「点一条跳过去」永远是空的（老 bug）。
+     */
+    private fun blockIndexFor(blockId: String): Int {
+        val blocks = _state.value.blocks
+        val direct = blocks.indexOfFirst { it.id == blockId }
+        if (direct >= 0) return direct
+        val match = Regex("^b(\\d+)$").find(blockId.trim()) ?: return -1
+        val index = match.groupValues[1].toIntOrNull() ?: return -1
+        return if (index in blocks.indices) index else -1
+    }
+
+    /** 这条问题在全文里的字符区间（用来选中原文）；找不到返回 null。 */
+    fun issueRange(issue: com.creativeworkbench.writer.core.ai.AiIssue): Pair<Int, Int>? {
+        val blocks = _state.value.blocks
+        val index = blockIndexFor(issue.blockId)
+        if (index < 0) return null
+        val local = blocks[index].text.indexOf(issue.excerpt)
+        if (local < 0) return null
+        val base = blocks.take(index).sumOf { it.text.length + 1 }
+        return (base + local) to (base + local + issue.excerpt.length)
+    }
+
+    /** 直接采纳某条建议：把原文片段替换成 suggestion，改完从列表里移除。 */
+    fun applyIssueSuggestion(issue: com.creativeworkbench.writer.core.ai.AiIssue): Boolean {
+        if (issue.suggestion.isBlank()) return false
+        val blocks = _state.value.blocks
+        val index = blockIndexFor(issue.blockId)
+        if (index < 0) return false
+        val text = blocks[index].text
+        val local = text.indexOf(issue.excerpt)
+        if (local < 0) {
+            // 原文已经改了（用户自己改过或被别的建议改过）：这条自动作废
+            _state.update { it.copy(checkIssues = it.checkIssues.filterNot { i -> i === issue }) }
+            return false
+        }
+        val ok = applyAiRewrite(issue.blockId, local, local + issue.excerpt.length, issue.suggestion)
+        if (ok) {
+            _state.update { it.copy(checkIssues = it.checkIssues.filterNot { i -> i === issue }) }
+        }
+        return ok
+    }
+
+    /** 文字改动后，把「原文片段已经不存在」的问题自动剔除，避免列表越用越脏。 */
+    private fun pruneCheckIssues() {
+        if (_state.value.checkIssues.isEmpty()) return
+        val blocks = _state.value.blocks.associateBy { it.id }
+        val alive = _state.value.checkIssues.filter { issue ->
+            blocks[issue.blockId]?.text?.contains(issue.excerpt) == true
+        }
+        if (alive.size != _state.value.checkIssues.size) {
+            _state.update { it.copy(checkIssues = alive) }
+        }
+    }
+
     /** 从 AI「检查结果」跳到某一段：把光标定位到段首并让编辑器滚过去。 */
     fun jumpToBlock(blockId: String) {
         val blocks = _state.value.blocks
-        val index = blocks.indexOfFirst { it.id == blockId }
+        val index = blockIndexFor(blockId)
         if (index < 0) return
         val offset = blocks.take(index).sumOf { it.text.length + 1 }
         _state.update {

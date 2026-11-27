@@ -6,7 +6,9 @@ data class AiIssue(
     val blockId: String,
     val excerpt: String,
     val severity: String,
-    val message: String
+    val message: String,
+    /** 建议改成的文字；空 = 只能自己改（例如逻辑矛盾类问题） */
+    val suggestion: String = ""
 )
 
 object AiIssueParser {
@@ -22,7 +24,8 @@ object AiIssueParser {
                     blockId = item.optString("blockId"),
                     excerpt = item.optString("excerpt"),
                     severity = item.optString("severity", "low"),
-                    message = item.optString("message")
+                    message = item.optString("message"),
+                    suggestion = item.optString("suggestion")
                 )
             }
         }.getOrNull()

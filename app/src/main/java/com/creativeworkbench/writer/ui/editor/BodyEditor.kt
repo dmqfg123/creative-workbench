@@ -75,6 +75,17 @@ class BodyEditorController {
         scrollCaretIntoView()
     }
 
+    /** 选中一段并滚过去：AI 检查里「定位」用，落到引用原文上，用户可以直接改。 */
+    fun selectRange(start: Int, end: Int) {
+        val view = editText ?: return
+        val length = view.text?.length ?: 0
+        val s = start.coerceIn(0, length)
+        val e = end.coerceIn(s, length)
+        if (s == e) return
+        view.setSelection(s, e)
+        scrollCaretIntoView()
+    }
+
     /** 只放光标，不动滚动（恢复位置时用：滚动要按上次的比例走，不能被光标抢）。 */
     fun setCaret(offset: Int) {
         val view = editText ?: return
