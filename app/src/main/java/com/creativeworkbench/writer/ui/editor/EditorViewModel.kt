@@ -379,6 +379,9 @@ class EditorViewModel(
     fun selectionInfo(start: Int, end: Int): SelectionInfo? {
         val text = bodyText()
         if (start < 0 || end > text.length || start >= end) return null
+        // 跨段选区不支持：数据是按段存的，硬算只会把首段替换掉、其余选中文字原样留下，
+        // 用户看到的就是「改写结果重复/只改了一半」。宁可拒绝并提示，也不做半截替换。
+        if (text.substring(start, end).contains('\n')) return null
         val index = text.take(start).count { it == '\n' }
         val block = _state.value.blocks.getOrNull(index) ?: return null
         val lineStart = text.lastIndexOf('\n', (start - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }

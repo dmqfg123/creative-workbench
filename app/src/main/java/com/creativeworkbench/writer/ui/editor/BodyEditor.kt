@@ -282,8 +282,12 @@ fun BodyEditor(
             setOnClickListener { showSoftKeyboard(this) }
             customSelectionActionModeCallback = object : android.view.ActionMode.Callback {
                 override fun onCreateActionMode(mode: android.view.ActionMode?, menu: android.view.Menu?): Boolean {
+                    // 必须常显：IF_ROOM 在窄屏/长词选中时会被折进「⋮」，用户找不到这个功能
                     menu?.add(0, MENU_AI_REWRITE, 0, "AI 改写")
-                        ?.setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_IF_ROOM)
+                        ?.setShowAsAction(
+                            android.view.MenuItem.SHOW_AS_ACTION_ALWAYS or
+                                android.view.MenuItem.SHOW_AS_ACTION_WITH_TEXT
+                        )
                     // 不收起键盘：选中之后很可能紧接着就要输入（改字/替换），
                     // 收键盘是我之前擅自加的推断，用户没有要求这个行为。
                     return true
@@ -296,10 +300,13 @@ fun BodyEditor(
                     item: android.view.MenuItem?
                 ): Boolean {
                     if (item?.itemId != MENU_AI_REWRITE) return false
-                    val start = selectionStart
-                    val end = selectionEnd
-                    if (start in 0 until end) {
-                        onRewrite[0]?.invoke(start, end, text.substring(start, end))
+                    // 必须读「当前」Editable：菜单是选中时弹出的，点菜单项之前正文可能已经被
+                    // 输入法改过（抖动/联想替换），此时 selectionStart/End 会超出文本长度，
+                    // 直接 substring 就是 StringIndexOutOfBoundsException（1.0.1 的闪退）。
+                    val live = text?.toString().orEmpty()
+                    val range = clampSelection(live.length, selectionStart, selectionEnd)
+                    if (range != null) {
+                        onRewrite[0]?.invoke(range.first, range.last + 1, live.substring(range.first, range.last + 1))
                     }
                     mode?.finish()
                     return true
@@ -361,6 +368,21 @@ fun BodyEditor(
 }
 
 private const val MENU_AI_REWRITE = 1001
+
+/**
+ * 把系统给的选区夹到 [0, length) 内。
+ *
+ * 为什么要这个：ActionMode 菜单是选中时弹出的，点菜单项之前正文可能已被输入法改过
+ * （联想替换、抖动），此时 selectionStart/End 会超出当前文本长度。
+ * 1.0.1 直接 substring 就抛 StringIndexOutOfBoundsException（用户反馈的「改写闪退」）。
+ * 返回闭区间；没有有效选区（含 start==end、负值、越界后为空）返回 null。
+ */
+internal fun clampSelection(length: Int, rawStart: Int, rawEnd: Int): IntRange? {
+    if (length <= 0) return null
+    val start = rawStart.coerceIn(0, length)
+    val end = rawEnd.coerceIn(start, length)
+    return if (start < end) start..(end - 1) else null
+}
 
 private fun showSoftKeyboard(view: View) {
     val imm = view.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
