@@ -83,6 +83,8 @@ data class AiUiState(
     val noteMode: NoteContextMode = NoteContextMode.Auto,
     /** 自动模式的挑选结果（选了哪些、候选池多大、是不是模型挑的）。 */
     val notePick: AutoNotePick? = null,
+    /** 这次改写/扩写选中的字数；0 表示没有选区（走整章/范围）。 */
+    val selectionChars: Int = 0,
     /** 正在挑设定（一次便宜调用，界面上显示「正在挑资料…」而不是干等）。 */
     val noteSelecting: Boolean = false
 )
@@ -173,6 +175,8 @@ class AiViewModel(
             // 会用旧动作（比如「检查」的 JSON 提示词）去跑新动作（比如「续写」）
             prepared = null,
             overflow = null,
+            // 有选区时正文范围没有意义：只用来隐藏那排 chip，界面上不显示任何额外说明
+            selectionChars = selection?.text?.length ?: 0,
             error = null,
             resultText = "",
             issues = emptyList(),

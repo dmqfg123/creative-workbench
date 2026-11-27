@@ -300,13 +300,16 @@ fun BodyEditor(
                     item: android.view.MenuItem?
                 ): Boolean {
                     if (item?.itemId != MENU_AI_REWRITE) return false
-                    // 必须读「当前」Editable：菜单是选中时弹出的，点菜单项之前正文可能已经被
-                    // 输入法改过（抖动/联想替换），此时 selectionStart/End 会超出文本长度，
-                    // 直接 substring 就是 StringIndexOutOfBoundsException（1.0.1 的闪退）。
-                    val live = text?.toString().orEmpty()
-                    val range = clampSelection(live.length, selectionStart, selectionEnd)
-                    if (range != null) {
-                        onRewrite[0]?.invoke(range.first, range.last + 1, live.substring(range.first, range.last + 1))
+                    // 选区在点菜单这会儿可能已被收起：用 captureRewriteTarget 取（含最近一次非空选区兜底）。
+                    val target = captureRewriteTarget()
+                    if (target == null) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "先选中要改写的文字，再点 AI 改写",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        onRewrite[0]?.invoke(target.first, target.second, target.third)
                     }
                     mode?.finish()
                     return true
@@ -404,6 +407,35 @@ class BodyEditText(context: Context) : EditText(context) {
     val suppress = java.util.concurrent.atomic.AtomicBoolean(false)
     private var selectionListener: ((Int) -> Unit)? = null
     private var lastSelection = -1
+
+    /**
+     * 最近一次「非空选区」。
+     *
+     * 为什么要存：浮动菜单是选中时弹出的，点「AI 改写」时选区可能已经被收起/被输入法重置，
+     * 那时读 selectionStart/End 会拿到 -1 或折叠成光标 → 表现为「点了打不开面板」或
+     * 「原文只有一个字」。在 onSelectionChanged 里提前记下才是可靠来源。
+     */
+    var lastSelStart = -1
+        private set
+    var lastSelEnd = -1
+        private set
+
+    /**
+     * 取这次「AI 改写」要处理的目标：优先当前选区，其次最近一次非空选区，最后才放弃。
+     * 结果已按当前文本长度夹住，永远不会越界（1.0.1 闪退的根因）。
+     */
+    fun captureRewriteTarget(): Triple<Int, Int, String>? {
+        val live = text?.toString().orEmpty()
+        if (live.isEmpty()) return null
+        val liveValid = selectionStart >= 0 && selectionEnd > selectionStart &&
+            selectionEnd <= live.length
+        val rawStart = if (liveValid) selectionStart else lastSelStart
+        val rawEnd = if (liveValid) selectionEnd else lastSelEnd
+        val range = clampSelection(live.length, rawStart, rawEnd) ?: return null
+        val selected = live.substring(range.first, range.last + 1)
+        if (selected.isBlank()) return null
+        return Triple(range.first, range.last + 1, selected)
+    }
 
     /** 平台默认惯性（ScrollView / RecyclerView 同一套参数）。 */
     private val flingScroller = android.widget.OverScroller(context)
@@ -604,6 +636,11 @@ class BodyEditText(context: Context) : EditText(context) {
 
     override fun onSelectionChanged(selStart: Int, selEnd: Int) {
         super.onSelectionChanged(selStart, selEnd)
+        // 先记「非空选区」：这是 AI 改写唯一可靠的选区来源（点菜单时选区可能已被收起）
+        if (selStart >= 0 && selEnd > selStart) {
+            lastSelStart = selStart
+            lastSelEnd = selEnd
+        }
         if (selStart == lastSelection) return
         lastSelection = selStart
         if (!suppress.get()) selectionListener?.invoke(selStart)
