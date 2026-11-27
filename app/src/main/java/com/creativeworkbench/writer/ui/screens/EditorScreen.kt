@@ -504,6 +504,13 @@ fun EditorScreen(
                             keyboard?.hide()
                             aiOpen = true
                             aiViewModel.prepare(AiActions.REWRITE, state.blocks, info.blockId, info)
+                        } else {
+                            // 跨段选中、或选区在点菜单前被输入法改短了：给个明确提示，别静默无反应
+                            android.widget.Toast.makeText(
+                                context,
+                                "改写只支持单段选中：请只选一段文字（跨段请分段改）",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
                         }
                     },
                     modifier = Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp, bottom = 12.dp)
