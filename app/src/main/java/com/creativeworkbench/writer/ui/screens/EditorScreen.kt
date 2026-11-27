@@ -209,6 +209,13 @@ fun EditorScreen(
     var undoBarText by remember { mutableStateOf("") }
     var chapterSheetOpen by remember { mutableStateOf(false) }
     var historyOpen by remember { mutableStateOf(false) }
+    var checkSheetOpen by remember { mutableStateOf(false) }
+    // AI 检查结果落到编辑器状态：关掉面板、跳去改字之后回来还在，不用重跑（重跑要花钱）
+    LaunchedEffect(aiState.issues, aiState.action?.id) {
+        if (aiState.action?.id == AiActions.CHECK && aiState.issues.isNotEmpty()) {
+            viewModel.setCheckIssues(aiState.issues)
+        }
+    }
     var activeBlockMaxHeight by remember { mutableStateOf(320.dp) }
 
     val imeBottomPx = WindowInsets.ime.getBottom(density)
@@ -556,6 +563,13 @@ fun EditorScreen(
                             onDismiss = { undoBarVisible = false }
                         )
                     }
+                    androidx.compose.animation.AnimatedVisibility(visible = state.checkIssues.isNotEmpty()) {
+                        CheckResultsBar(
+                            count = state.checkIssues.size,
+                            onClick = { checkSheetOpen = true },
+                            onClear = { viewModel.clearCheckIssues() }
+                        )
+                    }
                     EditorToolbar(
                         undoAvailable = state.undoAvailable,
                         redoAvailable = state.redoAvailable,
@@ -668,6 +682,31 @@ fun EditorScreen(
         )
     }
 
+    if (checkSheetOpen) {
+        CheckSheet(
+            issues = state.checkIssues,
+            onJump = { issue ->
+                val range = viewModel.issueRange(issue)
+                if (range == null) {
+                    // 模型有时会引用正文里并不存在的片段：别静默无反应，直说
+                    android.widget.Toast.makeText(
+                        context,
+                        "这段原文不在正文里了（可能已被改过），可以重新检查一次",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                } else {
+                    bodyController.selectRange(range.first, range.second)
+                    checkSheetOpen = false
+                }
+            },
+            onApply = { issue ->
+                viewModel.applyIssueSuggestion(issue)
+                if (state.checkIssues.size <= 1) checkSheetOpen = false
+            },
+            onDismiss = { checkSheetOpen = false }
+        )
+    }
+
     if (historyOpen) {
         HistorySheet(
             items = state.history,
@@ -777,10 +816,15 @@ fun EditorScreen(
                 }
             },
             onJumpToBlock = { blockId ->
-                // blockId 是正文里的 [[bN]] 或段落 id；统一交给 ViewModel 反查并定位光标
+                // 面板里的问题点一下：优先选中它的「原文片段」，落到字上才能直接改
                 aiOpen = false
-                aiViewModel.reset()
-                viewModel.jumpToBlock(blockId)
+                val issue = aiState.issues.firstOrNull { it.blockId == blockId }
+                val range = issue?.let { viewModel.issueRange(it) }
+                if (range != null) {
+                    bodyController.selectRange(range.first, range.second)
+                } else {
+                    viewModel.jumpToBlock(blockId)
+                }
             },
             // 改字数/范围/来源/勾选笔记后立刻按新配置重新装配上下文（预览马上跟着变）
             onLength = { len ->
@@ -1323,6 +1367,81 @@ private fun HistorySheet(
                             Text("恢复", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+/** 检查结果条：只有「N 条」和一个关闭，不加任何说明文字。 */
+@Composable
+private fun CheckResultsBar(count: Int, onClick: () -> Unit, onClear: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "检查 " + count + " 条",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(Modifier.weight(1f))
+        IconButton(onClick = onClear, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Default.Close, contentDescription = "清除检查结果", modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+/** 检查结果列表：一行一条，点一下选中该条原文；有建议的可以一键替换。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CheckSheet(
+    issues: List<com.creativeworkbench.writer.core.ai.AiIssue>,
+    onJump: (com.creativeworkbench.writer.core.ai.AiIssue) -> Unit,
+    onApply: (com.creativeworkbench.writer.core.ai.AiIssue) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 20.dp, end = 20.dp, bottom = 16.dp)) {
+            Text("检查结果", style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(6.dp))
+            androidx.compose.foundation.lazy.LazyColumn(Modifier.heightIn(max = 460.dp)) {
+                items(issues, key = { it.blockId + it.excerpt }) { issue ->
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onJump(issue) }
+                            .padding(vertical = 10.dp)
+                    ) {
+                        Text(issue.excerpt, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            issue.message,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (issue.suggestion.isNotBlank()) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    issue.suggestion,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                TextButton(onClick = { onApply(issue) }) { Text("替换") }
+                            }
+                        }
+                    }
+                    androidx.compose.material3.HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant
+                    )
                 }
             }
         }

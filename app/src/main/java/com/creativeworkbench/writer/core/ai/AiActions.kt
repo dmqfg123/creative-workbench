@@ -133,7 +133,7 @@ object AiActions {
         REWRITE -> "请改写下面这段文字，保持情节与信息不变，控制在原文 0.8-1.2 倍长度：\n" + (selection ?: "")
         EXPAND -> "请把下面这段扩写到约 2 倍长度，补细节不补情节：\n" + (selection ?: "")
         SUMMARY -> "用 100–200 字总结【当前章】：谁做了什么、结果如何、结尾留下了什么。只输出摘要正文。"
-        CHECK -> "请检查【当前章】正文，输出严格 JSON（不要代码围栏）：{\"issues\":[{\"blockId\":\"段落 id\",\"excerpt\":\"原文片段\",\"severity\":\"low|medium|high\",\"message\":\"问题说明\"}]}。没有问题就输出 {\"issues\":[]}。"
+        CHECK -> "请检查【当前章】正文，输出严格 JSON（不要代码围栏）：{\"issues\":[{\"blockId\":\"段落 id\",\"excerpt\":\"原文片段（不超过 30 字，必须是正文原样）\",\"severity\":\"low|medium|high\",\"message\":\"问题说明\",\"suggestion\":\"建议改成的文字；逻辑/设定冲突这类没法直接替换的留空\"}]}。没有问题就输出 {\"issues\":[]}。"
         else -> ""
     }
 }
